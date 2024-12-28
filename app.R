@@ -1,35 +1,30 @@
 library(shiny)
+library(shinyjs)
+library(httr)
+library(jsonlite)
 library(TwoSampleMR)
 library(dplyr)
 
 ui <- fluidPage(
-  titlePanel("Two-Sample Mendelian Randomization (MR) Analysis"),
+  useShinyjs(),  # Enable JavaScript
+  titlePanel("Two-Sample Mendelian Randomization (MR) Analysis with Chat Support"),
   sidebarLayout(
     sidebarPanel(
-      fileInput("exposure", "Upload Exposure GWAS Summary Stats (TSV or CSV):", accept = c(".tsv", ".csv")),
-      fileInput("outcome", "Upload Outcome GWAS Summary Stats (TSV or CSV):", accept = c(".tsv", ".csv")),
-      selectInput("sep", "File Separator:", choices = c("Tab" = "\t", "Comma" = ","), selected = "\t"),
-      actionButton("run_analysis", "Run MR Analysis")
+      h4("MR Analysis"),
+      selectInput("exposure_trait", "Select Exposure Trait from GWAS Catalog:", choices = NULL),
+      selectInput("outcome_trait", "Select Outcome Trait from GWAS Catalog:", choices = NULL),
+      actionButton("run_analysis", "Run MR Analysis"),
+      hr(),
+      h4("Chat with Assistant"),
+      textInput("user_query", "Ask a question:", ""),
+      actionButton("submit_query", "Send"),
+      div(id = "chat_box", style = "height: 200px; overflow-y: auto; border: 1px solid #ddd; padding: 10px;")
     ),
     mainPanel(
       tabsetPanel(
-        tabPanel("Data Preview", 
-                 h3("Exposure Data"),
-                 tableOutput("preview_exposure"),
-                 h3("Outcome Data"),
-                 tableOutput("preview_outcome")),
         tabPanel("Harmonized Data", tableOutput("harmonized_data")),
         tabPanel("MR Results", tableOutput("mr_results")),
-        tabPanel("Plots", plotOutput("mr_plot")),
-        tabPanel("Debugging Info", 
-                 h3("Exposure Data Columns"),
-                 verbatimTextOutput("exposure_cols"),
-                 h3("Outcome Data Columns"),
-                 verbatimTextOutput("outcome_cols"),
-                 h3("Processed Exposure Data"),
-                 tableOutput("debug_exposure"),
-                 h3("Processed Outcome Data"),
-                 tableOutput("debug_outcome"))
+        tabPanel("Plots", plotOutput("mr_plot"))
       )
     )
   )
@@ -37,121 +32,81 @@ ui <- fluidPage(
 
 server <- function(input, output, session) {
   
-  # Column mapping function
-  map_columns <- function(data, column_mapping) {
-    colnames(data) <- tolower(colnames(data)) # Normalize column names
-    for (col in names(column_mapping)) {
-      if (column_mapping[col] %in% colnames(data)) {
-        colnames(data)[colnames(data) == column_mapping[col]] <- col
+  # Function to fetch GWAS Catalog traits
+  gwas_traits <- reactive({
+    tryCatch({
+      response <- GET("https://www.ebi.ac.uk/gwas/rest/api/associations")
+      if (response$status_code == 200) {
+        traits <- fromJSON(content(response, as = "text"), flatten = TRUE)$trait
+        unique(traits)
+      } else {
+        stop("Failed to fetch GWAS Catalog traits.")
       }
-    }
-    return(data)
+    }, error = function(e) {
+      return(c("Error fetching traits" = NA))
+    })
+  })
+  
+  # Update dropdown choices for traits
+  observe({
+    traits <- gwas_traits()
+    updateSelectInput(session, "exposure_trait", choices = traits)
+    updateSelectInput(session, "outcome_trait", choices = traits)
+  })
+  
+  # Function to fetch GWAS data for a specific trait
+  fetch_gwas_data <- function(trait) {
+    tryCatch({
+      response <- GET(paste0("https://www.ebi.ac.uk/gwas/rest/api/traits/", URLencode(trait), "/associations"))
+      if (response$status_code == 200) {
+        data <- fromJSON(content(response, as = "text"), flatten = TRUE)
+        # Convert data to required format for MR analysis
+        processed_data <- data.frame(
+          snp = data$rsId,
+          beta = data$beta,
+          se = data$standardError,
+          effect_allele = data$effectAllele,
+          other_allele = data$otherAllele,
+          eaf = data$eaf,
+          pval = data$pValue,
+          samplesize = data$sampleSize
+        )
+        processed_data
+      } else {
+        stop("Failed to fetch GWAS summary statistics.")
+      }
+    }, error = function(e) {
+      return(NULL)
+    })
   }
   
-  # Column mappings for exposure and outcome data
-  exposure_mapping <- list(
-    snp = "rsid",
-    beta = "effect",
-    se = "se",
-    effect_allele = "a1",
-    other_allele = "a2",
-    eaf = "a1_freq",
-    pval = "p-value",
-    samplesize = "n"
-  )
-  
-  outcome_mapping <- list(
-    snp = "rsid",
-    beta = "effect",
-    se = "se",
-    effect_allele = "a1",
-    other_allele = "a2",
-    eaf = "a1_freq",
-    pval = "p-value",
-    samplesize = "n"
-  )
-  
-  # Debugging: Display column names of uploaded files
-  output$exposure_cols <- renderPrint({
-    req(input$exposure)
-    tryCatch({
-      data <- read.table(input$exposure$datapath, header = TRUE, sep = input$sep, stringsAsFactors = FALSE, fill = TRUE, comment.char = "")
-      colnames(data)
-    }, error = function(e) {
-      paste("Error reading exposure data:", e$message)
-    })
+  # Reactive values for exposure and outcome data
+  exposure_data <- reactive({
+    req(input$exposure_trait)
+    fetch_gwas_data(input$exposure_trait)
   })
   
-  output$outcome_cols <- renderPrint({
-    req(input$outcome)
-    tryCatch({
-      data <- read.table(input$outcome$datapath, header = TRUE, sep = input$sep, stringsAsFactors = FALSE, fill = TRUE, comment.char = "")
-      colnames(data)
-    }, error = function(e) {
-      paste("Error reading outcome data:", e$message)
-    })
-  })
-  
-  # Handle row mismatches in Exposure Data
-  processed_exposure <- reactive({
-    req(input$exposure)
-    tryCatch({
-      data <- read.table(input$exposure$datapath, header = TRUE, sep = input$sep, stringsAsFactors = FALSE, fill = TRUE, comment.char = "")
-      map_columns(data, exposure_mapping)
-    }, error = function(e) {
-      stop("Error processing exposure data: ", e$message)
-    })
-  })
-  
-  # Handle row mismatches in Outcome Data
-  processed_outcome <- reactive({
-    req(input$outcome)
-    tryCatch({
-      data <- read.table(input$outcome$datapath, header = TRUE, sep = input$sep, stringsAsFactors = FALSE, fill = TRUE, comment.char = "")
-      map_columns(data, outcome_mapping)
-    }, error = function(e) {
-      stop("Error processing outcome data: ", e$message)
-    })
+  outcome_data <- reactive({
+    req(input$outcome_trait)
+    fetch_gwas_data(input$outcome_trait)
   })
   
   # Harmonize data
   harmonized_data <- eventReactive(input$run_analysis, {
-    req(processed_exposure(), processed_outcome())
-    tryCatch({
-      harmonised <- harmonise_data(
-        exposure_dat = processed_exposure(),
-        outcome_dat = processed_outcome()
-      )
-      if (nrow(harmonised) == 0) stop("Harmonized data contains no valid rows.")
-      return(harmonised)
-    }, error = function(e) {
-      stop("Error during harmonization: ", e$message)
-    })
+    req(exposure_data(), outcome_data())
+    harmonise_data(
+      exposure_dat = exposure_data(),
+      outcome_dat = outcome_data()
+    )
   })
   
   # Run MR analysis
   mr_results <- eventReactive(input$run_analysis, {
     req(harmonized_data())
-    tryCatch({
-      results <- mr(harmonized_data())
-      if (nrow(results) == 0) stop("MR analysis returned no results.")
-      return(results)
-    }, error = function(e) {
-      stop("Error during MR analysis: ", e$message)
-    })
+    mr(harmonized_data())
   })
   
-  # Outputs
-  output$preview_exposure <- renderTable({
-    req(processed_exposure())
-    head(processed_exposure())
-  })
-  
-  output$preview_outcome <- renderTable({
-    req(processed_outcome())
-    head(processed_outcome())
-  })
-  
+  # Outputs for MR analysis
   output$harmonized_data <- renderTable({
     req(harmonized_data())
     head(harmonized_data())
@@ -167,14 +122,24 @@ server <- function(input, output, session) {
     mr_scatter_plot(mr_results(), harmonized_data())
   })
   
-  output$debug_exposure <- renderTable({
-    req(processed_exposure())
-    head(processed_exposure())
-  })
+  # ChatGPT integration
+  chat_history <- reactiveVal("")
   
-  output$debug_outcome <- renderTable({
-    req(processed_outcome())
-    head(processed_outcome())
+  observeEvent(input$submit_query, {
+    user_message <- input$user_query
+    if (nchar(user_message) > 0) {
+      chat_history(paste(chat_history(), "<b>You:</b> ", user_message, "<br>"))
+      
+      # Placeholder for ChatGPT API response (replace with actual API integration)
+      assistant_reply <- paste0("You asked: ", user_message, ". This is a placeholder reply from ChatGPT.")
+      
+      # Update chat history
+      chat_history(paste(chat_history(), "<b>Assistant:</b> ", assistant_reply, "<br>"))
+      updateTextInput(session, "user_query", value = "")
+    }
+    
+    # Update chat box
+    shinyjs::html("chat_box", chat_history())
   })
 }
 
