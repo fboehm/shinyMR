@@ -10,7 +10,7 @@ get_chatgpt_response <- function(user_query) {
   api_url <- "https://api.openai.com/v1/chat/completions"
   
   # Replace "your-api-key-here" with your actual API key
-  api_key <- "your-api-key-here"  # Replace this string with your API key
+  api_key <- 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  # Replace this string with your API key
   
   body <- list(
     model = "gpt-4",
@@ -45,14 +45,10 @@ ui <- fluidPage(
   sidebarLayout(
     sidebarPanel(
       h4("Upload GWAS Summary Statistics Files"),
-      fileInput("exposure_file", "Upload Exposure File", accept = c(".csv", ".tsv")),
-      fileInput("outcome_file", "Upload Outcome File", accept = c(".csv", ".tsv")),
-      hr(),
-      h4("Map Columns (Exposure File)"),
-      uiOutput("exposure_mappings"),
-      hr(),
-      h4("Map Columns (Outcome File)"),
-      uiOutput("outcome_mappings"),
+      fileInput("exposure_file", "Upload Exposure File (TSV):", accept = c(".tsv")),
+      uiOutput("exposure_columns"),
+      fileInput("outcome_file", "Upload Outcome File (TSV):", accept = c(".tsv")),
+      uiOutput("outcome_columns"),
       actionButton("run_analysis", "Run MR Analysis"),
       hr(),
       h4("Chat with Assistant"),
@@ -72,93 +68,93 @@ ui <- fluidPage(
 
 # Server Logic
 server <- function(input, output, session) {
-  # Reactive data for column names
-  exposure_columns <- reactive({
-    req(input$exposure_file)
-    file <- input$exposure_file
-    data <- read.csv(file$datapath, nrows = 1)  # Read only the first row
-    colnames(data)
-  })
-  
-  outcome_columns <- reactive({
-    req(input$outcome_file)
-    file <- input$outcome_file
-    data <- read.csv(file$datapath, nrows = 1)  # Read only the first row
-    colnames(data)
-  })
-  
-  # Render dropdown menus for exposure file column mappings
-  output$exposure_mappings <- renderUI({
-    req(exposure_columns())
-    tags$div(
-      selectInput("exposure_snp", "SNP Column:", choices = exposure_columns(), selected = NULL),
-      selectInput("exposure_beta", "Beta Column:", choices = exposure_columns(), selected = NULL),
-      selectInput("exposure_se", "SE Column:", choices = exposure_columns(), selected = NULL),
-      selectInput("exposure_effect_allele", "Effect Allele Column:", choices = exposure_columns(), selected = NULL),
-      selectInput("exposure_other_allele", "Other Allele Column:", choices = exposure_columns(), selected = NULL),
-      selectInput("exposure_eaf", "EAF Column:", choices = exposure_columns(), selected = NULL),
-      selectInput("exposure_pval", "P-value Column:", choices = exposure_columns(), selected = NULL),
-      selectInput("exposure_samplesize", "Sample Size Column:", choices = exposure_columns(), selected = NULL)
-    )
-  })
-  
-  # Render dropdown menus for outcome file column mappings
-  output$outcome_mappings <- renderUI({
-    req(outcome_columns())
-    tags$div(
-      selectInput("outcome_snp", "SNP Column:", choices = outcome_columns(), selected = NULL),
-      selectInput("outcome_beta", "Beta Column:", choices = outcome_columns(), selected = NULL),
-      selectInput("outcome_se", "SE Column:", choices = outcome_columns(), selected = NULL),
-      selectInput("outcome_effect_allele", "Effect Allele Column:", choices = outcome_columns(), selected = NULL),
-      selectInput("outcome_other_allele", "Other Allele Column:", choices = outcome_columns(), selected = NULL),
-      selectInput("outcome_eaf", "EAF Column:", choices = outcome_columns(), selected = NULL),
-      selectInput("outcome_pval", "P-value Column:", choices = outcome_columns(), selected = NULL),
-      selectInput("outcome_samplesize", "Sample Size Column:", choices = outcome_columns(), selected = NULL)
-    )
-  })
-  
-  # Read and process the uploaded files based on user-selected column mappings
-  process_file <- function(file, snp, beta, se, effect_allele, other_allele, eaf, pval, samplesize) {
-    req(file)
-    data <- read.csv(file$datapath)
-    data <- data.frame(
-      snp = data[[snp]],
-      beta = data[[beta]],
-      se = data[[se]],
-      effect_allele = data[[effect_allele]],
-      other_allele = data[[other_allele]],
-      eaf = data[[eaf]],
-      pval = data[[pval]],
-      samplesize = data[[samplesize]]
-    )
-    return(data)
-  }
-  
+  # Read and process uploaded files
   exposure_data <- reactive({
-    req(input$exposure_file, input$exposure_snp, input$exposure_beta, input$exposure_se, 
-        input$exposure_effect_allele, input$exposure_other_allele, 
-        input$exposure_eaf, input$exposure_pval, input$exposure_samplesize)
-    process_file(
-      input$exposure_file, input$exposure_snp, input$exposure_beta, input$exposure_se,
-      input$exposure_effect_allele, input$exposure_other_allele, 
-      input$exposure_eaf, input$exposure_pval, input$exposure_samplesize
-    )
+    req(input$exposure_file)
+    read.delim(input$exposure_file$datapath, header = TRUE, stringsAsFactors = FALSE)
   })
   
   outcome_data <- reactive({
-    req(input$outcome_file, input$outcome_snp, input$outcome_beta, input$outcome_se, 
-        input$outcome_effect_allele, input$outcome_other_allele, 
-        input$outcome_eaf, input$outcome_pval, input$outcome_samplesize)
-    process_file(
-      input$outcome_file, input$outcome_snp, input$outcome_beta, input$outcome_se,
-      input$outcome_effect_allele, input$outcome_other_allele, 
-      input$outcome_eaf, input$outcome_pval, input$outcome_samplesize
+    req(input$outcome_file)
+    read.delim(input$outcome_file$datapath, header = TRUE, stringsAsFactors = FALSE)
+  })
+  
+  # Generate dropdown menus for column selection
+  output$exposure_columns <- renderUI({
+    req(exposure_data())
+    column_names <- names(exposure_data())
+    tagList(
+      selectInput("exposure_snp", "SNP Column:", choices = column_names),
+      selectInput("exposure_beta", "Beta Column:", choices = column_names),
+      selectInput("exposure_se", "SE Column:", choices = column_names),
+      selectInput("exposure_effect_allele", "Effect Allele Column:", choices = column_names),
+      selectInput("exposure_other_allele", "Other Allele Column:", choices = column_names),
+      selectInput("exposure_eaf", "EAF Column:", choices = column_names),
+      selectInput("exposure_pval", "P-Value Column:", choices = column_names),
+      selectInput("exposure_samplesize", "Sample Size Column:", choices = column_names)
     )
   })
   
+  output$outcome_columns <- renderUI({
+    req(outcome_data())
+    column_names <- names(outcome_data())
+    tagList(
+      selectInput("outcome_snp", "SNP Column:", choices = column_names),
+      selectInput("outcome_beta", "Beta Column:", choices = column_names),
+      selectInput("outcome_se", "SE Column:", choices = column_names),
+      selectInput("outcome_effect_allele", "Effect Allele Column:", choices = column_names),
+      selectInput("outcome_other_allele", "Other Allele Column:", choices = column_names),
+      selectInput("outcome_eaf", "EAF Column:", choices = column_names),
+      selectInput("outcome_pval", "P-Value Column:", choices = column_names),
+      selectInput("outcome_samplesize", "Sample Size Column:", choices = column_names)
+    )
+  })
+  
+  # Map columns based on user selection
+  map_columns <- function(data, mapping) {
+    colnames(data) <- tolower(colnames(data))
+    mapped_data <- data.frame(
+      snp = data[[mapping$snp]],
+      beta = data[[mapping$beta]],
+      se = data[[mapping$se]],
+      effect_allele = data[[mapping$effect_allele]],
+      other_allele = data[[mapping$other_allele]],
+      eaf = data[[mapping$eaf]],
+      pval = data[[mapping$pval]],
+      samplesize = data[[mapping$samplesize]]
+    )
+    mapped_data
+  }
+  
+  # Harmonized data
   harmonized_data <- eventReactive(input$run_analysis, {
     req(exposure_data(), outcome_data())
-    harmonise_data(exposure_dat = exposure_data(), outcome_dat = outcome_data())
+    
+    exposure_mapping <- list(
+      snp = input$exposure_snp,
+      beta = input$exposure_beta,
+      se = input$exposure_se,
+      effect_allele = input$exposure_effect_allele,
+      other_allele = input$exposure_other_allele,
+      eaf = input$exposure_eaf,
+      pval = input$exposure_pval,
+      samplesize = input$exposure_samplesize
+    )
+    
+    outcome_mapping <- list(
+      snp = input$outcome_snp,
+      beta = input$outcome_beta,
+      se = input$outcome_se,
+      effect_allele = input$outcome_effect_allele,
+      other_allele = input$outcome_other_allele,
+      eaf = input$outcome_eaf,
+      pval = input$outcome_pval,
+      samplesize = input$outcome_samplesize
+    )
+    
+    exposure_mapped <- map_columns(exposure_data(), exposure_mapping)
+    outcome_mapped <- map_columns(outcome_data(), outcome_mapping)
+    harmonise_data(exposure_dat = exposure_mapped, outcome_dat = outcome_mapped)
   })
   
   mr_results <- eventReactive(input$run_analysis, {
