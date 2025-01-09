@@ -10,7 +10,7 @@ get_chatgpt_response <- function(user_query) {
   api_url <- "https://api.openai.com/v1/chat/completions"
   
   # Replace "your-api-key-here" with your actual API key
-  api_key <- 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  # Replace this string with your API key
+  api_key <- "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"  # Replace this string with your API key
   
   body <- list(
     model = "gpt-4",
