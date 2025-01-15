@@ -9,8 +9,7 @@ library(dplyr)
 get_chatgpt_response <- function(user_query) {
   api_url <- "https://api.openai.com/v1/chat/completions"
   
-  # Replace "your-api-key-here" with your actual API key
-  api_key <- "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"  # Replace this string with your API key
+  api_key <- "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"  
   
   body <- list(
     model = "gpt-4",
@@ -41,13 +40,22 @@ get_chatgpt_response <- function(user_query) {
 # UI Definition
 ui <- fluidPage(
   useShinyjs(),
-  titlePanel("Mendelian Randomization with Column Mapping"),
+  titlePanel("Two-Sample Mendelian Randomization Analysis"),
   sidebarLayout(
     sidebarPanel(
+      h4("Aim of the MR Investigation"),
+      selectInput("mr_aim", "What is the aim of the MR investigation?", 
+                  choices = c("To assess the causal role of an exposure", 
+                              "To evaluate the quantitative impact of an intervention on the exposure")),
+      hr(),
       h4("Upload GWAS Summary Statistics Files"),
       fileInput("exposure_file", "Upload Exposure File (TSV):", accept = c(".tsv")),
-      uiOutput("exposure_columns"),
       fileInput("outcome_file", "Upload Outcome File (TSV):", accept = c(".tsv")),
+      h5("Study Population Metadata (if available):"),
+      verbatimTextOutput("metadata_display"),
+      hr(),
+      h4("Column Mapping for GWAS Summary Statistics"),
+      uiOutput("exposure_columns"),
       uiOutput("outcome_columns"),
       actionButton("run_analysis", "Run MR Analysis"),
       hr(),
@@ -60,7 +68,8 @@ ui <- fluidPage(
       tabsetPanel(
         tabPanel("Harmonized Data", tableOutput("harmonized_data")),
         tabPanel("MR Results", tableOutput("mr_results")),
-        tabPanel("Plots", plotOutput("mr_plot"))
+        tabPanel("Plots", plotOutput("mr_plot")),
+        tabPanel("Sensitivity Analyses", tableOutput("sensitivity_results"))
       )
     )
   )
@@ -77,6 +86,16 @@ server <- function(input, output, session) {
   outcome_data <- reactive({
     req(input$outcome_file)
     read.delim(input$outcome_file$datapath, header = TRUE, stringsAsFactors = FALSE)
+  })
+  
+  # Extract study population metadata
+  output$metadata_display <- renderPrint({
+    req(input$exposure_file, input$outcome_file)
+    # Placeholder: Display file names as metadata example
+    list(
+      Exposure = input$exposure_file$name,
+      Outcome = input$outcome_file$name
+    )
   })
   
   # Generate dropdown menus for column selection
@@ -162,9 +181,17 @@ server <- function(input, output, session) {
     mr(harmonized_data())
   })
   
+  # Perform sensitivity analyses automatically
+  sensitivity_results <- eventReactive(input$run_analysis, {
+    req(harmonized_data())
+    # Placeholder: Sensitivity analyses logic
+    list(Sensitivity1 = "Result 1", Sensitivity2 = "Result 2")
+  })
+  
   # Outputs for MR Analysis and Plots
   output$harmonized_data <- renderTable({ req(harmonized_data()); head(harmonized_data()) })
   output$mr_results <- renderTable({ req(mr_results()); mr_results() })
+  output$sensitivity_results <- renderTable({ req(sensitivity_results()); sensitivity_results() })
   output$mr_plot <- renderPlot({ req(mr_results(), harmonized_data()); mr_scatter_plot(mr_results(), harmonized_data()) })
   
   # ChatGPT Integration
