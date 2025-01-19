@@ -9,7 +9,7 @@ library(dplyr)
 get_chatgpt_response <- function(user_query) {
   api_url <- "https://api.openai.com/v1/chat/completions"
   
-  api_key <- "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"  
+  api_key <- "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" 
   
   body <- list(
     model = "gpt-4",
@@ -40,22 +40,17 @@ get_chatgpt_response <- function(user_query) {
 # UI Definition
 ui <- fluidPage(
   useShinyjs(),
-  titlePanel("Two-Sample Mendelian Randomization Analysis"),
+  titlePanel("Two-Sample Mendelian Randomization Analysis with ChatGPT"),
   sidebarLayout(
     sidebarPanel(
-      h4("Aim of the MR Investigation"),
-      selectInput("mr_aim", "What is the aim of the MR investigation?", 
-                  choices = c("To assess the causal role of an exposure", 
-                              "To evaluate the quantitative impact of an intervention on the exposure")),
+      h4("Select GWAS Traits"),
+      selectInput("exposure_trait", "Exposure Trait (GWAS Catalog):", choices = NULL),
+      selectInput("outcome_trait", "Outcome Trait (GWAS Catalog):", choices = NULL),
+      actionButton("fetch_data", "Fetch GWAS Data"),
       hr(),
-      h4("Upload GWAS Summary Statistics Files"),
-      fileInput("exposure_file", "Upload Exposure File (TSV):", accept = c(".tsv")),
-      fileInput("outcome_file", "Upload Outcome File (TSV):", accept = c(".tsv")),
-      h5("Study Population Metadata (if available):"),
-      verbatimTextOutput("metadata_display"),
-      hr(),
-      h4("Column Mapping for GWAS Summary Statistics"),
+      h4("Column Mapping for Exposure"),
       uiOutput("exposure_columns"),
+      h4("Column Mapping for Outcome"),
       uiOutput("outcome_columns"),
       actionButton("run_analysis", "Run MR Analysis"),
       hr(),
@@ -77,28 +72,69 @@ ui <- fluidPage(
 
 # Server Logic
 server <- function(input, output, session) {
-  # Read and process uploaded files
-  exposure_data <- reactive({
-    req(input$exposure_file)
-    read.delim(input$exposure_file$datapath, header = TRUE, stringsAsFactors = FALSE)
+  # Fetch GWAS Catalog traits dynamically
+  gwas_traits <- reactive({
+    tryCatch({
+      response <- GET("https://www.ebi.ac.uk/gwas/rest/api/traits")
+      if (response$status_code == 200) {
+        traits <- fromJSON(content(response, as = "text"), flatten = TRUE)$trait
+        unique(traits)
+      } else {
+        warning("GWAS Catalog API unavailable. Using fallback traits.")
+        c("Trait1", "Trait2", "Trait3")  # Example fallback traits
+      }
+    }, error = function(e) {
+      showNotification("Error fetching GWAS Catalog traits. Using fallback list.", type = "warning")
+      c("Trait1", "Trait2", "Trait3")  # Example fallback traits
+    })
   })
   
-  outcome_data <- reactive({
-    req(input$outcome_file)
-    read.delim(input$outcome_file$datapath, header = TRUE, stringsAsFactors = FALSE)
+  # Populate GWAS trait dropdowns when the app starts
+  observe({
+    traits <- gwas_traits()
+    updateSelectInput(session, "exposure_trait", choices = traits)
+    updateSelectInput(session, "outcome_trait", choices = traits)
   })
   
-  # Extract study population metadata
-  output$metadata_display <- renderPrint({
-    req(input$exposure_file, input$outcome_file)
-    # Placeholder: Display file names as metadata example
-    list(
-      Exposure = input$exposure_file$name,
-      Outcome = input$outcome_file$name
-    )
+  # Fetch GWAS data when the user clicks "Fetch Data"
+  query_gwas_catalog <- function(trait) {
+    base_url <- "https://www.ebi.ac.uk/gwas/rest/api/traits/"
+    url <- paste0(base_url, URLencode(trait), "/associations")
+    
+    tryCatch({
+      response <- GET(url)
+      if (response$status_code == 200) {
+        data <- fromJSON(content(response, as = "text"), flatten = TRUE)
+        data.frame(
+          snp = data$rsId,
+          beta = data$beta,
+          se = data$standardError,
+          effect_allele = data$effectAllele,
+          other_allele = data$otherAllele,
+          eaf = data$eaf,
+          pval = data$pValue,
+          samplesize = data$sampleSize
+        )
+      } else {
+        stop("Failed to fetch GWAS data from the catalog.")
+      }
+    }, error = function(e) {
+      showNotification("Error fetching GWAS data. Please check the GWAS catalog.", type = "error")
+      return(NULL)
+    })
+  }
+  
+  exposure_data <- eventReactive(input$fetch_data, {
+    req(input$exposure_trait)
+    query_gwas_catalog(input$exposure_trait)
   })
   
-  # Generate dropdown menus for column selection
+  outcome_data <- eventReactive(input$fetch_data, {
+    req(input$outcome_trait)
+    query_gwas_catalog(input$outcome_trait)
+  })
+  
+  # Generate dropdown menus for column mapping
   output$exposure_columns <- renderUI({
     req(exposure_data())
     column_names <- names(exposure_data())
@@ -181,17 +217,17 @@ server <- function(input, output, session) {
     mr(harmonized_data())
   })
   
-  # Perform sensitivity analyses automatically
-  sensitivity_results <- eventReactive(input$run_analysis, {
-    req(harmonized_data())
-    # Placeholder: Sensitivity analyses logic
-    list(Sensitivity1 = "Result 1", Sensitivity2 = "Result 2")
-  })
-  
   # Outputs for MR Analysis and Plots
   output$harmonized_data <- renderTable({ req(harmonized_data()); head(harmonized_data()) })
   output$mr_results <- renderTable({ req(mr_results()); mr_results() })
-  output$sensitivity_results <- renderTable({ req(sensitivity_results()); sensitivity_results() })
+  output$sensitivity_results <- renderTable({
+    req(mr_results())
+    # Placeholder for sensitivity analyses
+    data.frame(
+      Analysis = c("Leave-One-Out", "Heterogeneity Test"),
+      Result = c("Placeholder Result 1", "Placeholder Result 2")
+    )
+  })
   output$mr_plot <- renderPlot({ req(mr_results(), harmonized_data()); mr_scatter_plot(mr_results(), harmonized_data()) })
   
   # ChatGPT Integration
