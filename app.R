@@ -9,7 +9,7 @@ library(dplyr)
 get_chatgpt_response <- function(user_query) {
   api_url <- "https://api.openai.com/v1/chat/completions"
   
-  api_key <- "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" 
+  api_key <- "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"
   
   body <- list(
     model = "gpt-4",
@@ -43,7 +43,7 @@ ui <- fluidPage(
   titlePanel("Two-Sample Mendelian Randomization Analysis with ChatGPT"),
   sidebarLayout(
     sidebarPanel(
-      h4("Select GWAS Traits"),
+      h4("Search GWAS Traits from Catalog"),
       selectInput("exposure_trait", "Exposure Trait (GWAS Catalog):", choices = NULL),
       selectInput("outcome_trait", "Outcome Trait (GWAS Catalog):", choices = NULL),
       actionButton("fetch_data", "Fetch GWAS Data"),
@@ -80,28 +80,29 @@ server <- function(input, output, session) {
         traits <- fromJSON(content(response, as = "text"), flatten = TRUE)$trait
         unique(traits)
       } else {
-        warning("GWAS Catalog API unavailable. Using fallback traits.")
-        c("Trait1", "Trait2", "Trait3")  # Example fallback traits
+        showNotification("Failed to fetch GWAS traits. Please try again later.", type = "error")
+        NULL
       }
     }, error = function(e) {
-      showNotification("Error fetching GWAS Catalog traits. Using fallback list.", type = "warning")
-      c("Trait1", "Trait2", "Trait3")  # Example fallback traits
+      showNotification("Error fetching GWAS traits. Please check your network.", type = "error")
+      NULL
     })
   })
   
-  # Populate GWAS trait dropdowns when the app starts
+  # Populate GWAS trait dropdowns dynamically
   observe({
     traits <- gwas_traits()
-    updateSelectInput(session, "exposure_trait", choices = traits)
-    updateSelectInput(session, "outcome_trait", choices = traits)
+    if (!is.null(traits)) {
+      updateSelectInput(session, "exposure_trait", choices = traits)
+      updateSelectInput(session, "outcome_trait", choices = traits)
+    }
   })
   
-  # Fetch GWAS data when the user clicks "Fetch Data"
-  query_gwas_catalog <- function(trait) {
-    base_url <- "https://www.ebi.ac.uk/gwas/rest/api/traits/"
-    url <- paste0(base_url, URLencode(trait), "/associations")
-    
+  # Fetch GWAS data for the selected traits
+  fetch_gwas_data <- function(trait) {
     tryCatch({
+      base_url <- "https://www.ebi.ac.uk/gwas/rest/api/traits/"
+      url <- paste0(base_url, URLencode(trait), "/associations")
       response <- GET(url)
       if (response$status_code == 200) {
         data <- fromJSON(content(response, as = "text"), flatten = TRUE)
@@ -116,22 +117,23 @@ server <- function(input, output, session) {
           samplesize = data$sampleSize
         )
       } else {
-        stop("Failed to fetch GWAS data from the catalog.")
+        showNotification("Failed to fetch GWAS data for the selected trait.", type = "error")
+        NULL
       }
     }, error = function(e) {
       showNotification("Error fetching GWAS data. Please check the GWAS catalog.", type = "error")
-      return(NULL)
+      NULL
     })
   }
   
   exposure_data <- eventReactive(input$fetch_data, {
     req(input$exposure_trait)
-    query_gwas_catalog(input$exposure_trait)
+    fetch_gwas_data(input$exposure_trait)
   })
   
   outcome_data <- eventReactive(input$fetch_data, {
     req(input$outcome_trait)
-    query_gwas_catalog(input$outcome_trait)
+    fetch_gwas_data(input$outcome_trait)
   })
   
   # Generate dropdown menus for column mapping
