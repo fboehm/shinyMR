@@ -5,11 +5,61 @@ library(jsonlite)
 library(TwoSampleMR)
 library(dplyr)
 
+# Helper function: Fetch EFO traits
+fetch_efo_traits <- function() {
+  base_url <- "https://www.ebi.ac.uk/gwas/rest/api/traits"
+  response <- GET(base_url)
+  if (response$status_code == 200) {
+    traits <- fromJSON(content(response, as = "text"), flatten = TRUE)
+    return(unique(traits$trait))
+  } else {
+    return(NULL)
+  }
+}
+
+# Helper function: Fetch associations for a given trait
+fetch_associations <- function(trait) {
+  base_url <- "https://www.ebi.ac.uk/gwas/rest/api/traits/"
+  url <- paste0(base_url, URLencode(trait), "/associations")
+  response <- GET(url)
+  if (response$status_code == 200) {
+    data <- fromJSON(content(response, as = "text"), flatten = TRUE)
+    if (!is.null(data$rsId)) {
+      return(data.frame(
+        snp = data$rsId,
+        beta = data$beta,
+        se = data$standardError,
+        effect_allele = data$effectAllele,
+        other_allele = data$otherAllele,
+        eaf = data$eaf,
+        pval = data$pValue,
+        samplesize = data$sampleSize
+      ))
+    } else {
+      return(NULL)
+    }
+  } else {
+    return(NULL)
+  }
+}
+
+# Helper function: Fetch metadata
+fetch_metadata <- function() {
+  base_url <- "https://www.ebi.ac.uk/gwas/rest/api/metadata"
+  response <- GET(base_url)
+  if (response$status_code == 200) {
+    metadata <- fromJSON(content(response, as = "text"), flatten = TRUE)
+    return(metadata)
+  } else {
+    return(NULL)
+  }
+}
+
 # ChatGPT API Call Function
 get_chatgpt_response <- function(user_query) {
   api_url <- "https://api.openai.com/v1/chat/completions"
   
-  api_key <- "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"
+  api_key <- "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"  
   
   body <- list(
     model = "gpt-4",
@@ -40,13 +90,16 @@ get_chatgpt_response <- function(user_query) {
 # UI Definition
 ui <- fluidPage(
   useShinyjs(),
-  titlePanel("Two-Sample Mendelian Randomization Analysis with ChatGPT"),
+  titlePanel("Two-Sample Mendelian Randomization with GWAS API and ChatGPT"),
   sidebarLayout(
     sidebarPanel(
-      h4("Search GWAS Traits from Catalog"),
-      selectInput("exposure_trait", "Exposure Trait (GWAS Catalog):", choices = NULL),
-      selectInput("outcome_trait", "Outcome Trait (GWAS Catalog):", choices = NULL),
+      h4("Search and Select GWAS Traits"),
+      selectInput("exposure_trait", "Exposure Trait:", choices = NULL),
+      selectInput("outcome_trait", "Outcome Trait:", choices = NULL),
       actionButton("fetch_data", "Fetch GWAS Data"),
+      hr(),
+      h4("GWAS Catalog Metadata"),
+      verbatimTextOutput("metadata_display"),
       hr(),
       h4("Column Mapping for Exposure"),
       uiOutput("exposure_columns"),
@@ -72,68 +125,34 @@ ui <- fluidPage(
 
 # Server Logic
 server <- function(input, output, session) {
-  # Fetch GWAS Catalog traits dynamically
-  gwas_traits <- reactive({
-    tryCatch({
-      response <- GET("https://www.ebi.ac.uk/gwas/rest/api/traits")
-      if (response$status_code == 200) {
-        traits <- fromJSON(content(response, as = "text"), flatten = TRUE)$trait
-        unique(traits)
-      } else {
-        showNotification("Failed to fetch GWAS traits. Please try again later.", type = "error")
-        NULL
-      }
-    }, error = function(e) {
-      showNotification("Error fetching GWAS traits. Please check your network.", type = "error")
-      NULL
-    })
-  })
-  
-  # Populate GWAS trait dropdowns dynamically
+  # Populate GWAS traits dynamically
   observe({
-    traits <- gwas_traits()
+    traits <- fetch_efo_traits()
     if (!is.null(traits)) {
       updateSelectInput(session, "exposure_trait", choices = traits)
       updateSelectInput(session, "outcome_trait", choices = traits)
     }
   })
   
-  # Fetch GWAS data for the selected traits
-  fetch_gwas_data <- function(trait) {
-    tryCatch({
-      base_url <- "https://www.ebi.ac.uk/gwas/rest/api/traits/"
-      url <- paste0(base_url, URLencode(trait), "/associations")
-      response <- GET(url)
-      if (response$status_code == 200) {
-        data <- fromJSON(content(response, as = "text"), flatten = TRUE)
-        data.frame(
-          snp = data$rsId,
-          beta = data$beta,
-          se = data$standardError,
-          effect_allele = data$effectAllele,
-          other_allele = data$otherAllele,
-          eaf = data$eaf,
-          pval = data$pValue,
-          samplesize = data$sampleSize
-        )
-      } else {
-        showNotification("Failed to fetch GWAS data for the selected trait.", type = "error")
-        NULL
-      }
-    }, error = function(e) {
-      showNotification("Error fetching GWAS data. Please check the GWAS catalog.", type = "error")
-      NULL
-    })
-  }
+  # Fetch metadata
+  output$metadata_display <- renderPrint({
+    metadata <- fetch_metadata()
+    if (!is.null(metadata)) {
+      metadata
+    } else {
+      "Unable to fetch metadata."
+    }
+  })
   
+  # Fetch GWAS data for selected traits
   exposure_data <- eventReactive(input$fetch_data, {
     req(input$exposure_trait)
-    fetch_gwas_data(input$exposure_trait)
+    fetch_associations(input$exposure_trait)
   })
   
   outcome_data <- eventReactive(input$fetch_data, {
     req(input$outcome_trait)
-    fetch_gwas_data(input$outcome_trait)
+    fetch_associations(input$outcome_trait)
   })
   
   # Generate dropdown menus for column mapping
@@ -167,23 +186,7 @@ server <- function(input, output, session) {
     )
   })
   
-  # Map columns based on user selection
-  map_columns <- function(data, mapping) {
-    colnames(data) <- tolower(colnames(data))
-    mapped_data <- data.frame(
-      snp = data[[mapping$snp]],
-      beta = data[[mapping$beta]],
-      se = data[[mapping$se]],
-      effect_allele = data[[mapping$effect_allele]],
-      other_allele = data[[mapping$other_allele]],
-      eaf = data[[mapping$eaf]],
-      pval = data[[mapping$pval]],
-      samplesize = data[[mapping$samplesize]]
-    )
-    mapped_data
-  }
-  
-  # Harmonized data
+  # Harmonize and analyze data
   harmonized_data <- eventReactive(input$run_analysis, {
     req(exposure_data(), outcome_data())
     
@@ -209,22 +212,21 @@ server <- function(input, output, session) {
       samplesize = input$outcome_samplesize
     )
     
-    exposure_mapped <- map_columns(exposure_data(), exposure_mapping)
-    outcome_mapped <- map_columns(outcome_data(), outcome_mapping)
+    exposure_mapped <- exposure_data()[, names(exposure_mapping)]
+    outcome_mapped <- outcome_data()[, names(outcome_mapping)]
     harmonise_data(exposure_dat = exposure_mapped, outcome_dat = outcome_mapped)
   })
   
+  # MR results and plots
   mr_results <- eventReactive(input$run_analysis, {
     req(harmonized_data())
     mr(harmonized_data())
   })
   
-  # Outputs for MR Analysis and Plots
   output$harmonized_data <- renderTable({ req(harmonized_data()); head(harmonized_data()) })
   output$mr_results <- renderTable({ req(mr_results()); mr_results() })
   output$sensitivity_results <- renderTable({
     req(mr_results())
-    # Placeholder for sensitivity analyses
     data.frame(
       Analysis = c("Leave-One-Out", "Heterogeneity Test"),
       Result = c("Placeholder Result 1", "Placeholder Result 2")
@@ -234,7 +236,6 @@ server <- function(input, output, session) {
   
   # ChatGPT Integration
   chat_history <- reactiveVal("")
-  
   observeEvent(input$submit_query, {
     user_message <- input$user_query
     if (nchar(user_message) > 0) {
