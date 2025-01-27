@@ -1,0 +1,49 @@
+
+---
+title: "Mendelian Randomization Analysis Report"
+output: html_document
+params:
+  harmonized_data: NULL
+  mr_results: NULL
+---
+
+# Mendelian Randomization Analysis Report
+
+This report provides the results of the Mendelian Randomization (MR) analysis performed in the Shiny app.
+
+---
+
+## **Harmonized Data**
+The harmonized data used for the MR analysis is summarized below.
+
+```{r echo=FALSE}
+if (!is.null(params$harmonized_data)) {
+  knitr::kable(params$harmonized_data, caption = "Harmonized Data", row.names = FALSE)
+} else {
+  "No harmonized data available."
+}
+```
+
+---
+
+## **MR Results**
+The results of the Mendelian Randomization analysis are shown below.
+
+```{r echo=FALSE}
+if (!is.null(params$mr_results)) {
+  knitr::kable(params$mr_results, caption = "MR Results", row.names = FALSE)
+} else {
+  "No MR results available."
+}
+```
+
+---
+
+## **Summary**
+This report was generated automatically from the Shiny app and includes:
+- The harmonized data used for the analysis.
+- The results of the Mendelian Randomization analysis.
+
+Generated on: `r Sys.Date()`
+```
+
