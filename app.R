@@ -4,11 +4,13 @@ library(httr)
 library(jsonlite)
 library(TwoSampleMR)
 library(dplyr)
+library(rmarkdown)
 
 # Helper function: Fetch EFO traits
 fetch_efo_traits <- function() {
   base_url <- "https://www.ebi.ac.uk/gwas/rest/api/traits"
   response <- GET(base_url)
+  
   if (response$status_code == 200) {
     traits <- fromJSON(content(response, as = "text"), flatten = TRUE)
     return(unique(traits$trait))
@@ -22,6 +24,7 @@ fetch_associations <- function(trait) {
   base_url <- "https://www.ebi.ac.uk/gwas/rest/api/traits/"
   url <- paste0(base_url, URLencode(trait), "/associations")
   response <- GET(url)
+  
   if (response$status_code == 200) {
     data <- fromJSON(content(response, as = "text"), flatten = TRUE)
     if (!is.null(data$rsId)) {
@@ -43,69 +46,39 @@ fetch_associations <- function(trait) {
   }
 }
 
-# Helper function: Fetch metadata
-fetch_metadata <- function() {
-  base_url <- "https://www.ebi.ac.uk/gwas/rest/api/metadata"
-  response <- GET(base_url)
-  if (response$status_code == 200) {
-    metadata <- fromJSON(content(response, as = "text"), flatten = TRUE)
-    return(metadata)
-  } else {
-    return(NULL)
-  }
-}
-
-# ChatGPT API Call Function
-get_chatgpt_response <- function(user_query) {
-  api_url <- "https://api.openai.com/v1/chat/completions"
-  
-  api_key <- "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"  
-  
-  body <- list(
-    model = "gpt-4",
-    messages = list(
-      list(role = "system", content = "You are a helpful assistant for a Shiny app."),
-      list(role = "user", content = user_query)
-    )
-  )
-  
-  response <- POST(
-    api_url,
-    add_headers(
-      Authorization = paste("Bearer", api_key),
-      `Content-Type` = "application/json"
-    ),
-    body = toJSON(body, auto_unbox = TRUE),
-    encode = "json"
-  )
-  
-  if (response$status_code == 200) {
-    content <- content(response, as = "parsed")
-    return(content$choices[[1]]$message$content)  # Return ChatGPT response
-  } else {
-    stop(paste("API request failed (status code:", response$status_code, ")"))
-  }
-}
-
 # UI Definition
 ui <- fluidPage(
   useShinyjs(),
-  titlePanel("Two-Sample Mendelian Randomization with GWAS API and ChatGPT"),
+  titlePanel("Searchable GWAS Traits and MR Analysis"),
   sidebarLayout(
     sidebarPanel(
       h4("Search and Select GWAS Traits"),
-      selectInput("exposure_trait", "Exposure Trait:", choices = NULL),
-      selectInput("outcome_trait", "Outcome Trait:", choices = NULL),
+      selectizeInput(
+        "exposure_trait",
+        "Exposure Trait:",
+        choices = NULL,
+        options = list(
+          placeholder = "Type to search for a trait",
+          maxOptions = 10  # Limits the number of autocomplete options shown
+        )
+      ),
+      selectizeInput(
+        "outcome_trait",
+        "Outcome Trait:",
+        choices = NULL,
+        options = list(
+          placeholder = "Type to search for a trait",
+          maxOptions = 10
+        )
+      ),
       actionButton("fetch_data", "Fetch GWAS Data"),
-      hr(),
-      h4("GWAS Catalog Metadata"),
-      verbatimTextOutput("metadata_display"),
       hr(),
       h4("Column Mapping for Exposure"),
       uiOutput("exposure_columns"),
       h4("Column Mapping for Outcome"),
       uiOutput("outcome_columns"),
       actionButton("run_analysis", "Run MR Analysis"),
+      downloadButton("download_report", "Download RMarkdown Report"),
       hr(),
       h4("Chat with Assistant"),
       textInput("user_query", "Ask a question:", ""),
@@ -116,8 +89,7 @@ ui <- fluidPage(
       tabsetPanel(
         tabPanel("Harmonized Data", tableOutput("harmonized_data")),
         tabPanel("MR Results", tableOutput("mr_results")),
-        tabPanel("Plots", plotOutput("mr_plot")),
-        tabPanel("Sensitivity Analyses", tableOutput("sensitivity_results"))
+        tabPanel("Plots", plotOutput("mr_plot"))
       )
     )
   )
@@ -125,22 +97,16 @@ ui <- fluidPage(
 
 # Server Logic
 server <- function(input, output, session) {
-  # Populate GWAS traits dynamically
+  # Dynamically fetch and populate traits
   observe({
     traits <- fetch_efo_traits()
     if (!is.null(traits)) {
-      updateSelectInput(session, "exposure_trait", choices = traits)
-      updateSelectInput(session, "outcome_trait", choices = traits)
-    }
-  })
-  
-  # Fetch metadata
-  output$metadata_display <- renderPrint({
-    metadata <- fetch_metadata()
-    if (!is.null(metadata)) {
-      metadata
+      updateSelectizeInput(session, "exposure_trait", choices = traits, server = TRUE)
+      updateSelectizeInput(session, "outcome_trait", choices = traits, server = TRUE)
     } else {
-      "Unable to fetch metadata."
+      showNotification("Failed to fetch GWAS traits. Using fallback list.", type = "warning")
+      updateSelectizeInput(session, "exposure_trait", choices = c("Trait1", "Trait2", "Trait3"), server = TRUE)
+      updateSelectizeInput(session, "outcome_trait", choices = c("Trait1", "Trait2", "Trait3"), server = TRUE)
     }
   })
   
@@ -189,35 +155,9 @@ server <- function(input, output, session) {
   # Harmonize and analyze data
   harmonized_data <- eventReactive(input$run_analysis, {
     req(exposure_data(), outcome_data())
-    
-    exposure_mapping <- list(
-      snp = input$exposure_snp,
-      beta = input$exposure_beta,
-      se = input$exposure_se,
-      effect_allele = input$exposure_effect_allele,
-      other_allele = input$exposure_other_allele,
-      eaf = input$exposure_eaf,
-      pval = input$exposure_pval,
-      samplesize = input$exposure_samplesize
-    )
-    
-    outcome_mapping <- list(
-      snp = input$outcome_snp,
-      beta = input$outcome_beta,
-      se = input$outcome_se,
-      effect_allele = input$outcome_effect_allele,
-      other_allele = input$outcome_other_allele,
-      eaf = input$outcome_eaf,
-      pval = input$outcome_pval,
-      samplesize = input$outcome_samplesize
-    )
-    
-    exposure_mapped <- exposure_data()[, names(exposure_mapping)]
-    outcome_mapped <- outcome_data()[, names(outcome_mapping)]
-    harmonise_data(exposure_dat = exposure_mapped, outcome_dat = outcome_mapped)
+    harmonise_data(exposure_dat = exposure_data(), outcome_dat = outcome_data())
   })
   
-  # MR results and plots
   mr_results <- eventReactive(input$run_analysis, {
     req(harmonized_data())
     mr(harmonized_data())
@@ -225,14 +165,19 @@ server <- function(input, output, session) {
   
   output$harmonized_data <- renderTable({ req(harmonized_data()); head(harmonized_data()) })
   output$mr_results <- renderTable({ req(mr_results()); mr_results() })
-  output$sensitivity_results <- renderTable({
-    req(mr_results())
-    data.frame(
-      Analysis = c("Leave-One-Out", "Heterogeneity Test"),
-      Result = c("Placeholder Result 1", "Placeholder Result 2")
-    )
-  })
   output$mr_plot <- renderPlot({ req(mr_results(), harmonized_data()); mr_scatter_plot(mr_results(), harmonized_data()) })
+  
+  # Generate RMarkdown Report
+  output$download_report <- downloadHandler(
+    filename = function() { paste("MR_Analysis_Report_", Sys.Date(), ".html", sep = "") },
+    content = function(file) {
+      params <- list(
+        harmonized_data = harmonized_data(),
+        mr_results = mr_results()
+      )
+      rmarkdown::render("report_template.Rmd", output_file = file, params = params, envir = new.env(parent = globalenv()))
+    }
+  )
   
   # ChatGPT Integration
   chat_history <- reactiveVal("")
