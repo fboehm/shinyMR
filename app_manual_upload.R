@@ -3,6 +3,40 @@ library(shinyjs)
 library(TwoSampleMR)
 library(dplyr)
 library(rmarkdown)
+library(httr)
+library(jsonlite)
+
+# ChatGPT API Call Function
+get_chatgpt_response <- function(user_query) {
+  api_url <- "https://api.openai.com/v1/chat/completions"
+  
+  api_key <- "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" 
+  
+  body <- list(
+    model = "gpt-4",
+    messages = list(
+      list(role = "system", content = "You are a helpful assistant for a Shiny app."),
+      list(role = "user", content = user_query)
+    )
+  )
+  
+  response <- POST(
+    api_url,
+    add_headers(
+      Authorization = paste("Bearer", api_key),
+      `Content-Type` = "application/json"
+    ),
+    body = toJSON(body, auto_unbox = TRUE),
+    encode = "json"
+  )
+  
+  if (response$status_code == 200) {
+    content <- content(response, as = "parsed")
+    return(content$choices[[1]]$message$content)  # Return ChatGPT response
+  } else {
+    return("Error: Unable to fetch response from ChatGPT.")
+  }
+}
 
 # UI Definition
 ui <- fluidPage(
@@ -119,12 +153,8 @@ server <- function(input, output, session) {
     user_message <- input$user_query
     if (nchar(user_message) > 0) {
       chat_history(paste(chat_history(), "<b>You:</b> ", user_message, "<br>"))
-      tryCatch({
-        assistant_reply <- get_chatgpt_response(user_message)
-        chat_history(paste(chat_history(), "<b>Assistant:</b> ", assistant_reply, "<br>"))
-      }, error = function(e) {
-        chat_history(paste(chat_history(), "<b>Assistant:</b> ", "Error: Unable to fetch response.", "<br>"))
-      })
+      assistant_reply <- get_chatgpt_response(user_message)
+      chat_history(paste(chat_history(), "<b>Assistant:</b> ", assistant_reply, "<br>"))
       updateTextInput(session, "user_query", value = "")
     }
     shinyjs::html("chat_box", chat_history())
