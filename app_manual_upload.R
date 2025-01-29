@@ -4,10 +4,28 @@ library(TwoSampleMR)
 library(dplyr)
 library(rmarkdown)
 
+# Helper function: Read uploaded file safely
+read_uploaded_file <- function(file, sep) {
+  req(file)
+  tryCatch({
+    data <- read.table(file$datapath, header = TRUE, sep = sep, stringsAsFactors = FALSE, fill = TRUE, comment.char = "")
+    
+    # Ensure all rows have the correct number of columns
+    if (ncol(data) < 8) {  # Adjust this based on the expected number of columns
+      stop("Error: The uploaded file does not have enough columns. Please check the file format.")
+    }
+    
+    return(data)
+  }, error = function(e) {
+    showNotification("Error reading file. Please check the file format.", type = "error")
+    return(NULL)
+  })
+}
+
 # UI Definition
 ui <- fluidPage(
   useShinyjs(),
-  titlePanel("Manual Upload of GWAS Summary Statistics for MR Analysis"),
+  titlePanel("Two-Sample Mendelian Randomization (MR) - Manual File Upload"),
   sidebarLayout(
     sidebarPanel(
       h4("Upload GWAS Summary Statistics"),
@@ -20,6 +38,7 @@ ui <- fluidPage(
       h4("Column Mapping for Outcome"),
       uiOutput("outcome_columns"),
       actionButton("run_analysis", "Run MR Analysis"),
+      actionButton("reset_uploads", "Reset Uploads", style = "background-color: red; color: white;"),
       downloadButton("download_report", "Download RMarkdown Report")
     ),
     mainPanel(
@@ -34,26 +53,22 @@ ui <- fluidPage(
 
 # Server Logic
 server <- function(input, output, session) {
-  # Read uploaded files
-  read_uploaded_file <- function(file, sep) {
-    req(file)
-    read.table(file$datapath, header = TRUE, sep = sep, stringsAsFactors = FALSE)
-  }
+  # Reactive values to store uploaded data
+  rv <- reactiveValues(exposure_data = NULL, outcome_data = NULL)
   
-  exposure_data <- reactive({
-    req(input$exposure_file)
-    read_uploaded_file(input$exposure_file, input$sep)
+  # Read uploaded files and store in reactiveValues
+  observeEvent(input$exposure_file, {
+    rv$exposure_data <- read_uploaded_file(input$exposure_file, input$sep)
   })
   
-  outcome_data <- reactive({
-    req(input$outcome_file)
-    read_uploaded_file(input$outcome_file, input$sep)
+  observeEvent(input$outcome_file, {
+    rv$outcome_data <- read_uploaded_file(input$outcome_file, input$sep)
   })
   
   # Generate dropdown menus for column mapping
   output$exposure_columns <- renderUI({
-    req(exposure_data())
-    column_names <- names(exposure_data())
+    req(rv$exposure_data)
+    column_names <- names(rv$exposure_data)
     tagList(
       selectInput("exposure_snp", "SNP Column:", choices = column_names),
       selectInput("exposure_beta", "Beta Column:", choices = column_names),
@@ -67,8 +82,8 @@ server <- function(input, output, session) {
   })
   
   output$outcome_columns <- renderUI({
-    req(outcome_data())
-    column_names <- names(outcome_data())
+    req(rv$outcome_data)
+    column_names <- names(rv$outcome_data)
     tagList(
       selectInput("outcome_snp", "SNP Column:", choices = column_names),
       selectInput("outcome_beta", "Beta Column:", choices = column_names),
@@ -83,8 +98,8 @@ server <- function(input, output, session) {
   
   # Harmonize and analyze data
   harmonized_data <- eventReactive(input$run_analysis, {
-    req(exposure_data(), outcome_data())
-    harmonise_data(exposure_dat = exposure_data(), outcome_dat = outcome_data())
+    req(rv$exposure_data, rv$outcome_data)
+    harmonise_data(exposure_dat = rv$exposure_data, outcome_dat = rv$outcome_data)
   })
   
   mr_results <- eventReactive(input$run_analysis, {
@@ -107,6 +122,20 @@ server <- function(input, output, session) {
       rmarkdown::render("report_template.Rmd", output_file = file, params = params, envir = new.env(parent = globalenv()))
     }
   )
+  
+  # Reset uploaded files and selections
+  observeEvent(input$reset_uploads, {
+    rv$exposure_data <- NULL
+    rv$outcome_data <- NULL
+    updateFileInput(session, "exposure_file", value = NULL)
+    updateFileInput(session, "outcome_file", value = NULL)
+    output$exposure_columns <- renderUI(NULL)
+    output$outcome_columns <- renderUI(NULL)
+    output$harmonized_data <- renderTable(NULL)
+    output$mr_results <- renderTable(NULL)
+    output$mr_plot <- renderPlot(NULL)
+    showNotification("Uploads reset successfully!", type = "message")
+  })
 }
 
 shinyApp(ui = ui, server = server)
