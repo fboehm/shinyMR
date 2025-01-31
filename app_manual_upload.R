@@ -25,7 +25,7 @@ read_uploaded_file <- function(file, sep) {
 # UI Definition
 ui <- fluidPage(
   useShinyjs(),
-  titlePanel("Two-Sample Mendelian Randomization (MR) - Manual File Upload"),
+  titlePanel("Two-Sample Mendelian Randomization (MR) with Sensitivity Analyses"),
   sidebarLayout(
     sidebarPanel(
       h4("Upload GWAS Summary Statistics"),
@@ -37,15 +37,23 @@ ui <- fluidPage(
       uiOutput("exposure_columns"),
       h4("Column Mapping for Outcome"),
       uiOutput("outcome_columns"),
-      actionButton("run_analysis", "Run MR Analysis"),
+      hr(),
+      actionButton("run_analysis", "Run MR & Sensitivity Analyses"),
       actionButton("reset_uploads", "Reset Uploads", style = "background-color: red; color: white;"),
-      downloadButton("download_report", "Download RMarkdown Report")
+      downloadButton("download_report", "Download Report")
     ),
     mainPanel(
       tabsetPanel(
         tabPanel("Harmonized Data", tableOutput("harmonized_data")),
         tabPanel("MR Results", tableOutput("mr_results")),
-        tabPanel("Plots", plotOutput("mr_plot"))
+        tabPanel("Heterogeneity Test", tableOutput("heterogeneity_results")),
+        tabPanel("Pleiotropy Test", tableOutput("pleiotropy_results")),
+        tabPanel("Single SNP Analysis", tableOutput("single_snp_results")),
+        tabPanel("Leave-One-Out Analysis", tableOutput("leave_one_out_results")),
+        tabPanel("Plots", 
+                 plotOutput("mr_plot"), 
+                 plotOutput("funnel_plot"), 
+                 plotOutput("loo_forest_plot"))
       )
     )
   )
@@ -53,10 +61,9 @@ ui <- fluidPage(
 
 # Server Logic
 server <- function(input, output, session) {
-  # Reactive values to store uploaded data
   rv <- reactiveValues(exposure_data = NULL, outcome_data = NULL)
   
-  # Read uploaded files and store in reactiveValues
+  # Read uploaded files
   observeEvent(input$exposure_file, {
     rv$exposure_data <- read_uploaded_file(input$exposure_file, input$sep)
   })
@@ -65,7 +72,7 @@ server <- function(input, output, session) {
     rv$outcome_data <- read_uploaded_file(input$outcome_file, input$sep)
   })
   
-  # Generate dropdown menus for column mapping
+  # Generate dropdowns for column mapping
   output$exposure_columns <- renderUI({
     req(rv$exposure_data)
     column_names <- names(rv$exposure_data)
@@ -96,44 +103,65 @@ server <- function(input, output, session) {
     )
   })
   
-  # Harmonize and analyze data
+  # Harmonize data
   harmonized_data <- eventReactive(input$run_analysis, {
     req(rv$exposure_data, rv$outcome_data)
     harmonise_data(exposure_dat = rv$exposure_data, outcome_dat = rv$outcome_data)
   })
   
+  # MR Analysis
   mr_results <- eventReactive(input$run_analysis, {
     req(harmonized_data())
     mr(harmonized_data())
   })
   
+  # Sensitivity Analyses
+  heterogeneity_results <- eventReactive(input$run_analysis, {
+    req(harmonized_data())
+    mr_heterogeneity(harmonized_data())
+  })
+  
+  pleiotropy_results <- eventReactive(input$run_analysis, {
+    req(harmonized_data())
+    mr_pleiotropy_test(harmonized_data())
+  })
+  
+  single_snp_results <- eventReactive(input$run_analysis, {
+    req(harmonized_data())
+    mr_singlesnp(harmonized_data())
+  })
+  
+  leave_one_out_results <- eventReactive(input$run_analysis, {
+    req(harmonized_data())
+    mr_leaveoneout(harmonized_data())
+  })
+  
+  # Render Tables
   output$harmonized_data <- renderTable({ req(harmonized_data()); head(harmonized_data()) })
   output$mr_results <- renderTable({ req(mr_results()); mr_results() })
+  output$heterogeneity_results <- renderTable({ req(heterogeneity_results()); heterogeneity_results() })
+  output$pleiotropy_results <- renderTable({ req(pleiotropy_results()); pleiotropy_results() })
+  output$single_snp_results <- renderTable({ req(single_snp_results()); single_snp_results() })
+  output$leave_one_out_results <- renderTable({ req(leave_one_out_results()); leave_one_out_results() })
+  
+  # Generate Plots
   output$mr_plot <- renderPlot({ req(mr_results(), harmonized_data()); mr_scatter_plot(mr_results(), harmonized_data()) })
+  output$funnel_plot <- renderPlot({ req(single_snp_results()); mr_funnel_plot(single_snp_results()) })
+  output$loo_forest_plot <- renderPlot({ req(leave_one_out_results()); mr_leaveoneout_plot(leave_one_out_results()) })
   
-  # Generate RMarkdown Report
-  output$download_report <- downloadHandler(
-    filename = function() { paste("MR_Analysis_Report_", Sys.Date(), ".html", sep = "") },
-    content = function(file) {
-      params <- list(
-        harmonized_data = harmonized_data(),
-        mr_results = mr_results()
-      )
-      rmarkdown::render("report_template.Rmd", output_file = file, params = params, envir = new.env(parent = globalenv()))
-    }
-  )
-  
-  # Reset uploaded files and selections
+  # Reset uploaded files
   observeEvent(input$reset_uploads, {
     rv$exposure_data <- NULL
     rv$outcome_data <- NULL
-    updateFileInput(session, "exposure_file", value = NULL)
-    updateFileInput(session, "outcome_file", value = NULL)
-    output$exposure_columns <- renderUI(NULL)
-    output$outcome_columns <- renderUI(NULL)
     output$harmonized_data <- renderTable(NULL)
     output$mr_results <- renderTable(NULL)
+    output$heterogeneity_results <- renderTable(NULL)
+    output$pleiotropy_results <- renderTable(NULL)
+    output$single_snp_results <- renderTable(NULL)
+    output$leave_one_out_results <- renderTable(NULL)
     output$mr_plot <- renderPlot(NULL)
+    output$funnel_plot <- renderPlot(NULL)
+    output$loo_forest_plot <- renderPlot(NULL)
     showNotification("Uploads reset successfully!", type = "message")
   })
 }
