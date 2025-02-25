@@ -1,15 +1,18 @@
-# --------------------------
-# Updated Shiny App with GWASapi Integration
-# --------------------------
 library(shiny)
 library(shinyjs)
 library(TwoSampleMR)
 library(dplyr)
 library(rmarkdown)
 library(tools)
-library(GWASapi)  # New: For querying GWAS Catalog
+library(GWASapi)  # For querying GWAS Catalog
+library(httr)
+library(jsonlite)
 
-# Helper function: Read uploaded file safely
+# --------------------------
+# Helper Functions
+# --------------------------
+
+# 1) Read uploaded file safely
 read_uploaded_file <- function(file, sep) {
   req(file)
   tryCatch({
@@ -25,6 +28,62 @@ read_uploaded_file <- function(file, sep) {
   })
 }
 
+# 2) OLS-based lookup: common trait name -> EFO ID
+get_efo_from_trait_name <- function(trait_name) {
+  if (trait_name == "") return(NULL)
+  base_url <- "https://www.ebi.ac.uk/ols/api/search"
+  query_params <- list(q = trait_name, ontology = "efo", rows = 1)
+  
+  out <- tryCatch({
+    response <- GET(base_url, query = query_params)
+    if (response$status_code != 200) {
+      return(NULL)
+    }
+    cont <- content(response, as = "parsed", type = "application/json")
+    if (!is.null(cont$response$docs) && length(cont$response$docs) > 0) {
+      iri <- cont$response$docs[[1]]$iri
+      efo_id <- sub("http://www.ebi.ac.uk/efo/", "", iri, fixed = TRUE)
+      return(efo_id)
+    }
+    return(NULL)
+  }, error = function(e) {
+    return(NULL)
+  })
+  
+  out
+}
+
+# 3) OLS-based lookup: EFO ID -> common trait name
+get_trait_name_from_efo <- function(efo_id) {
+  if (efo_id == "") return(NULL)
+  
+  base_url <- "https://www.ebi.ac.uk/ols/api/ontologies/efo/terms"
+  url <- paste0(base_url, "?iri=http://www.ebi.ac.uk/efo/", efo_id)
+  
+  out <- tryCatch({
+    response <- GET(url)
+    if (response$status_code != 200) {
+      return(NULL)
+    }
+    cont <- content(response, as = "parsed", type = "application/json")
+    
+    if (!is.null(cont[["_embedded"]]) &&
+        !is.null(cont[["_embedded"]][["terms"]]) &&
+        length(cont[["_embedded"]][["terms"]]) > 0) {
+      label <- cont[["_embedded"]][["terms"]][[1]]$label
+      return(label)
+    }
+    return(NULL)
+  }, error = function(e) {
+    return(NULL)
+  })
+  
+  out
+}
+
+# --------------------------
+# UI
+# --------------------------
 ui <- fluidPage(
   useShinyjs(),
   titlePanel("Two-Sample Mendelian Randomization (MR) with Sensitivity Analyses + GWASapi"),
@@ -41,24 +100,42 @@ ui <- fluidPage(
       actionButton("update_threshold", "Update P-Value Threshold"),
       hr(),
       
-      # -- New: GWASapi-based SNP retrieval section --
+      # -- GWASapi-based SNP retrieval section --
       h4("GWASapi: Retrieve SNPs by Trait"),
+      textInput("exposure_trait_name", "Exposure Common Trait Name:", ""),
+      actionButton("lookup_exposure_efo", "Look Up Exposure EFO (from trait name)"),
+      br(),
       textInput("exposure_efo", "Exposure Trait EFO ID (e.g., EFO_0001360):", ""),
+      actionButton("lookup_exposure_trait", "Look Up Trait Name (from EFO)"),
+      
       numericInput("exposure_api_pval", "Max P-value for Exposure SNPs:", value = 5e-8),
       numericInput("exposure_api_size", "Number of Top Exposure Associations to Retrieve:", value = 100),
       actionButton("get_exposure_snps_api", "Get Exposure SNPs from GWAS Catalog"),
-      br(),
+      hr(),
       
+      textInput("outcome_trait_name", "Outcome Common Trait Name:", ""),
+      actionButton("lookup_outcome_efo", "Look Up Outcome EFO (from trait name)"),
+      br(),
       textInput("outcome_efo", "Outcome Trait EFO ID (e.g., EFO_0001360):", ""),
+      actionButton("lookup_outcome_trait", "Look Up Trait Name (from EFO)"),
+      
       numericInput("outcome_api_pval", "Max P-value for Outcome Associations:", value = 1.0),
       actionButton("get_outcome_snps_api", "Get Outcome SNPs (for the same SNP list)"),
       hr(),
       
-      # -- Column mapping from local or API-based data --
-      h4("Column Mapping for Exposure"),
-      uiOutput("exposure_columns"),
-      h4("Column Mapping for Outcome"),
-      uiOutput("outcome_columns"),
+      # -- Column Mapping for Exposure (conditional)
+      conditionalPanel(
+        condition = "output.showExposureMapping",
+        h4("Column Mapping for Exposure"),
+        uiOutput("exposure_columns")
+      ),
+      
+      # -- Column Mapping for Outcome (conditional)
+      conditionalPanel(
+        condition = "output.showOutcomeMapping",
+        h4("Column Mapping for Outcome"),
+        uiOutput("outcome_columns")
+      ),
       hr(),
       
       actionButton("run_analysis", "Run MR & Sensitivity Analyses"),
@@ -70,9 +147,12 @@ ui <- fluidPage(
         tabPanel("Harmonized Data", tableOutput("harmonized_data")),
         tabPanel("MR Results", tableOutput("mr_results")),
         
-        # -- New: Show results from GWASapi queries --
+        # -- Show results from GWASapi queries --
         tabPanel("GWAS Catalog Exposure SNPs", tableOutput("exposure_snps_api")),
         tabPanel("GWAS Catalog Outcome SNPs", tableOutput("outcome_snps_api")),
+        
+        # New tab to display filtered exposure SNPs for QC
+        tabPanel("Filtered Exposure SNPs (QC)", tableOutput("exposure_snp_qc")),
         
         tabPanel("Heterogeneity Test", tableOutput("heterogeneity_results")),
         tabPanel("Pleiotropy Test", tableOutput("pleiotropy_results")),
@@ -87,17 +167,20 @@ ui <- fluidPage(
   )
 )
 
+# --------------------------
+# Server
+# --------------------------
 server <- function(input, output, session) {
+  
   rv <- reactiveValues(
-    exposure_data = NULL,      # For local file or processed data
-    outcome_data = NULL,       # For local file or processed data
+    exposure_data = NULL,
+    outcome_data = NULL,
     pval_threshold = 5e-8,
-    # New: For GWASapi queries
-    exposure_snps_api = NULL,  # Exposure trait associations from GWAS Catalog
-    outcome_snps_api = NULL    # Outcome trait associations for the same SNPs
+    exposure_snps_api = NULL,
+    outcome_snps_api = NULL
   )
   
-  # 1. Handle local file uploads -----------------------------------------
+  # 1) Handle local file uploads --------------------------------------
   observeEvent(input$exposure_file, {
     file_info <- input$exposure_file
     if (!is.null(file_info)) {
@@ -128,65 +211,105 @@ server <- function(input, output, session) {
     rv$pval_threshold <- input$pval_threshold
   })
   
+  # 2) OLS-based lookups: common trait name <-> EFO ID ----------------
+  # Exposure: trait name -> EFO
+  observeEvent(input$lookup_exposure_efo, {
+    if (nzchar(input$exposure_trait_name)) {
+      efo_id <- get_efo_from_trait_name(input$exposure_trait_name)
+      if (!is.null(efo_id)) {
+        updateTextInput(session, "exposure_efo", value = efo_id)
+        showNotification(paste("Found EFO ID for exposure:", efo_id), type = "message")
+      } else {
+        showNotification("Could not find EFO for that exposure trait name.", type = "warning")
+      }
+    }
+  })
   
-  # 2. GWASapi: Retrieve exposure SNPs by trait ---------------------------
+  # Exposure: EFO -> trait name
+  observeEvent(input$lookup_exposure_trait, {
+    if (nzchar(input$exposure_efo)) {
+      trait_label <- get_trait_name_from_efo(input$exposure_efo)
+      if (!is.null(trait_label)) {
+        updateTextInput(session, "exposure_trait_name", value = trait_label)
+        showNotification(paste("Found trait name for exposure EFO:", trait_label), type = "message")
+      } else {
+        showNotification("Could not find trait name for that exposure EFO ID.", type = "warning")
+      }
+    }
+  })
+  
+  # Outcome: trait name -> EFO
+  observeEvent(input$lookup_outcome_efo, {
+    if (nzchar(input$outcome_trait_name)) {
+      efo_id <- get_efo_from_trait_name(input$outcome_trait_name)
+      if (!is.null(efo_id)) {
+        updateTextInput(session, "outcome_efo", value = efo_id)
+        showNotification(paste("Found EFO ID for outcome:", efo_id), type = "message")
+      } else {
+        showNotification("Could not find EFO for that outcome trait name.", type = "warning")
+      }
+    }
+  })
+  
+  # Outcome: EFO -> trait name
+  observeEvent(input$lookup_outcome_trait, {
+    if (nzchar(input$outcome_efo)) {
+      trait_label <- get_trait_name_from_efo(input$outcome_efo)
+      if (!is.null(trait_label)) {
+        updateTextInput(session, "outcome_trait_name", value = trait_label)
+        showNotification(paste("Found trait name for outcome EFO:", trait_label), type = "message")
+      } else {
+        showNotification("Could not find trait name for that outcome EFO ID.", type = "warning")
+      }
+    }
+  })
+  
+  # 3) GWASapi: Retrieve exposure SNPs by trait -------------------------
   observeEvent(input$get_exposure_snps_api, {
     req(input$exposure_efo)
     
-    # Query the GWAS Catalog for associations with a given trait EFO
-    # restricting to p-value < input$exposure_api_pval
-    # and returning up to input$exposure_api_size associations.
-    
-    # get_trait_asso() can retrieve all associations for a given trait EFO code
-    # We'll filter them by p_value < input$exposure_api_pval
-    # Then keep only the top 'exposure_api_size' associations by significance.
-    
-    api_result <- get_trait_asso(
-      input$exposure_efo,
-      p_upper = input$exposure_api_pval,
-      size = input$exposure_api_size
-    )
+    api_result <- tryCatch({
+      get_trait_asso(
+        input$exposure_efo,
+        p_upper = input$exposure_api_pval,
+        size = input$exposure_api_size
+      )
+    }, error = function(e) {
+      showNotification("Error querying GWAS Catalog for exposure trait. Please check your EFO ID or your connection.", type = "error")
+      return(NULL)
+    })
     
     if (!is.null(api_result) && nrow(api_result) > 0) {
-      # Sort by p-value ascending
       api_result <- api_result[order(api_result$p_value), ]
     }
     
     rv$exposure_snps_api <- api_result
   })
   
-  # Display the resulting exposure SNPs from the GWAS Catalog
   output$exposure_snps_api <- renderTable({
     req(rv$exposure_snps_api)
     head(rv$exposure_snps_api, 50)
   })
   
-  
-  # 3. GWASapi: Retrieve outcome SNPs for the same SNP list ----------------
+  # 4) GWASapi: Retrieve outcome SNPs for the same SNP list -------------
   observeEvent(input$get_outcome_snps_api, {
     req(rv$exposure_snps_api, input$outcome_efo)
+    exp_snps <- unique(rv$exposure_snps_api$variant_id)
     
-    # The approach here is:
-    #  - Extract the distinct variant identifiers (rsID) from the exposure results
-    #  - For each variant, call get_variant() from GWASapi
-    #  - Filter to keep only associations matching the user-specified outcome EFO
-    #  - Restrict to p_value < input$outcome_api_pval
-    
-    exp_snps <- unique(rv$exposure_snps_api$variant_id)  # Typically "rsID"
     results_list <- list()
     
-    # A small helper to safely query variants
     query_variant_for_outcome <- function(rs) {
-      # We can query all associations for the variant, then filter by outcome trait
-      vres <- get_variant(rs, size = 1000)  # can adjust size if needed
+      vres <- tryCatch({
+        get_variant(rs, size = 1000)
+      }, error = function(e) {
+        return(NULL)
+      })
       if (!is.null(vres) && nrow(vres) > 0) {
-        # Filter by trait and p-value
         vres <- vres[vres$trait == input$outcome_efo & vres$p_value <= input$outcome_api_pval, ]
       }
       vres
     }
     
-    # Loop over the SNPs and combine
     for (snp in exp_snps) {
       vdat <- query_variant_for_outcome(snp)
       if (!is.null(vdat) && nrow(vdat) > 0) {
@@ -202,31 +325,33 @@ server <- function(input, output, session) {
     rv$outcome_snps_api <- outcome_res
   })
   
-  # Display the resulting outcome associations
   output$outcome_snps_api <- renderTable({
     req(rv$outcome_snps_api)
     head(rv$outcome_snps_api, 50)
   })
   
+  # 5) Decide when to show/hide column mappings --------------------------
+  output$showExposureMapping <- reactive({
+    !is.null(rv$exposure_data) || !is.null(rv$exposure_snps_api)
+  })
+  outputOptions(output, "showExposureMapping", suspendWhenHidden = FALSE)
   
-  # 4. UI outputs for column mapping ---------------------------------------
+  output$showOutcomeMapping <- reactive({
+    !is.null(rv$outcome_data) || !is.null(rv$outcome_snps_api)
+  })
+  outputOptions(output, "showOutcomeMapping", suspendWhenHidden = FALSE)
+  
+  # 6) Column Mappings ---------------------------------------------------
   output$exposure_columns <- renderUI({
-    # We choose which data to map from: local file or possibly from the
-    # rv$exposure_snps_api. We'll default to local file if that was provided,
-    # otherwise let the user map from the GWASapi results, if desired.
-    
-    # If the user wants to do MR from the local file, we keep the old approach.
-    # They could also do a separate approach: convert the API results to the required format.
-    
     colnames_source <- NULL
-    
     if (!is.null(rv$exposure_data)) {
       colnames_source <- names(rv$exposure_data)
     } else if (!is.null(rv$exposure_snps_api)) {
       colnames_source <- names(rv$exposure_snps_api)
     }
-    
-    req(colnames_source)
+    if (is.null(colnames_source)) {
+      colnames_source <- c("N/A")
+    }
     
     tagList(
       selectInput("exposure_snp", "SNP Column:", choices = colnames_source),
@@ -241,16 +366,15 @@ server <- function(input, output, session) {
   })
   
   output$outcome_columns <- renderUI({
-    # Similar logic as exposure columns
     colnames_source <- NULL
-    
     if (!is.null(rv$outcome_data)) {
       colnames_source <- names(rv$outcome_data)
     } else if (!is.null(rv$outcome_snps_api)) {
       colnames_source <- names(rv$outcome_snps_api)
     }
-    
-    req(colnames_source)
+    if (is.null(colnames_source)) {
+      colnames_source <- c("N/A")
+    }
     
     tagList(
       selectInput("outcome_snp", "SNP Column:", choices = colnames_source),
@@ -264,11 +388,7 @@ server <- function(input, output, session) {
     )
   })
   
-  
-  # 5. MR pipeline --------------------------------------------------------
-  # Decide which data frames to use for exposure/outcome: local or from API
-  # For simplicity, we default to local if available, otherwise from the API.
-  
+  # 7) Decide which data frames to use ------------------------------------
   final_exposure_data <- reactive({
     if (!is.null(rv$exposure_data)) {
       rv$exposure_data
@@ -285,20 +405,26 @@ server <- function(input, output, session) {
     }
   })
   
-  # Harmonize and run MR after user clicks "Run MR & Sensitivity Analyses"
-  harmonized_data <- eventReactive(input$run_analysis, {
+  # 8) Harmonize and run MR after user clicks the button ------------------
+  exposure_filtered_data <- eventReactive(input$run_analysis, {
     exp_data <- final_exposure_data()
+    req(exp_data)
+    exp_pval_col <- input$exposure_pval
+    exposure_filtered <- exp_data %>% filter(.data[[exp_pval_col]] < rv$pval_threshold)
+    exposure_filtered
+  })
+  
+  output$exposure_snp_qc <- renderTable({
+    req(exposure_filtered_data())
+    head(exposure_filtered_data(), 50)
+  })
+  
+  harmonized_data <- eventReactive(input$run_analysis, {
+    exp_filtered <- exposure_filtered_data()
     out_data <- final_outcome_data()
-    req(exp_data, out_data)
-    
-    # Filter exposure data by user-chosen p-value threshold
-    # (local or from API). The input$exposure_pval is the name of the column,
-    # while rv$pval_threshold is the numeric threshold.
-    exposure_filtered <- exp_data %>%
-      filter(get(input$exposure_pval) < rv$pval_threshold)
-    
+    req(exp_filtered, out_data)
     harmonise_data(
-      exposure_dat = exposure_filtered,
+      exposure_dat = exp_filtered,
       outcome_dat  = out_data
     )
   })
@@ -318,26 +444,54 @@ server <- function(input, output, session) {
     mr_results()
   })
   
-  
-  # 6. Reset file uploads and data ----------------------------------------
+  # 9) Reset file uploads and data ----------------------------------------
   observeEvent(input$reset_uploads, {
     rv$exposure_data <- NULL
     rv$outcome_data <- NULL
     rv$exposure_snps_api <- NULL
     rv$outcome_snps_api <- NULL
     
-    # Visually clear the file inputs
     reset("exposure_file")
     reset("outcome_file")
     
-    # Clear displayed tables or outputs
     output$harmonized_data <- renderTable(NULL)
     output$mr_results <- renderTable(NULL)
     output$exposure_snps_api <- renderTable(NULL)
     output$outcome_snps_api <- renderTable(NULL)
+    output$exposure_snp_qc <- renderTable(NULL)
     
     showNotification("Uploads reset successfully!", type = "message")
   })
+  
+  # 10) Download report (R Markdown) --------------------------------------
+  output$download_report <- downloadHandler(
+    filename = function() {
+      paste0("MR_analysis_report_", Sys.Date(), ".html")
+    },
+    content = function(file) {
+      tempReport <- file.path(tempdir(), "report.Rmd")
+      file.copy("report.Rmd", tempReport, overwrite = TRUE)
+      
+      params <- list(
+        exposure_efo = input$exposure_efo,
+        outcome_efo = input$outcome_efo,
+        exposure_trait_name = input$exposure_trait_name,
+        outcome_trait_name = input$outcome_trait_name,
+        exposure_snps_api = rv$exposure_snps_api,
+        outcome_snps_api = rv$outcome_snps_api,
+        exposure_filtered_data = exposure_filtered_data(),
+        harmonized_data = harmonized_data(),
+        mr_results = mr_results()
+      )
+      
+      rmarkdown::render(
+        tempReport,
+        output_file = file,
+        params = params,
+        envir = new.env(parent = globalenv())
+      )
+    }
+  )
 }
 
 shinyApp(ui = ui, server = server)
