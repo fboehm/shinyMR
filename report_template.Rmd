@@ -1,49 +1,89 @@
-
 ---
-title: "Mendelian Randomization Analysis Report"
+title: "MR Analysis Report"
 output: html_document
 params:
-  harmonized_data: NULL
-  mr_results: NULL
+  exposure_efo: NA
+  outcome_efo: NA
+  exposure_trait_name: NA
+  outcome_trait_name: NA
+  exposure_snps_api: NA
+  outcome_snps_api: NA
+  exposure_filtered_data: NA
+  harmonized_data: NA
+  mr_results: NA
 ---
 
-# Mendelian Randomization Analysis Report
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(TwoSampleMR)
+library(GWASapi)
+library(dplyr)
+```
 
-This report provides the results of the Mendelian Randomization (MR) analysis performed in the Shiny app.
+## Overview
 
----
+This report reproduces the analysis performed in the Shiny application, including retrieving SNPs via GWASapi and conducting Mendelian Randomization.
 
-## **Harmonized Data**
-The harmonized data used for the MR analysis is summarized below.
+## EFO IDs and Trait Names
 
-```{r echo=FALSE}
-if (!is.null(params$harmonized_data)) {
-  knitr::kable(params$harmonized_data, caption = "Harmonized Data", row.names = FALSE)
+- **Exposure EFO**: `r params$exposure_efo`  
+- **Exposure Trait Name**: `r params$exposure_trait_name`  
+- **Outcome EFO**: `r params$outcome_efo`  
+- **Outcome Trait Name**: `r params$outcome_trait_name`
+
+## Retrieved Exposure SNPs via GWASapi
+
+```{r exposure-snps-api}
+ex_snps <- params$exposure_snps_api
+if(!is.null(ex_snps) && nrow(ex_snps) > 0) {
+  head(ex_snps, 10)
+} else {
+  "No exposure SNPs retrieved or none available."
+}
+```
+
+## Retrieved Outcome SNPs via GWASapi
+
+```{r outcome-snps-api}
+out_snps <- params$outcome_snps_api
+if(!is.null(out_snps) && nrow(out_snps) > 0) {
+  head(out_snps, 10)
+} else {
+  "No outcome SNPs retrieved or none available."
+}
+```
+
+## Filtered Exposure Data
+
+Below are the exposure-associated SNPs after applying the p-value threshold:
+
+```{r filtered-exposure}
+exp_filtered <- params$exposure_filtered_data
+if(!is.null(exp_filtered) && nrow(exp_filtered) > 0) {
+  head(exp_filtered, 10)
+} else {
+  "No filtered exposure data found."
+}
+```
+
+## Harmonized Data
+
+```{r harmonized-data}
+harm_dat <- params$harmonized_data
+if(!is.null(harm_dat) && nrow(harm_dat) > 0) {
+  head(harm_dat, 10)
 } else {
   "No harmonized data available."
 }
 ```
 
----
+## MR Results
 
-## **MR Results**
-The results of the Mendelian Randomization analysis are shown below.
-
-```{r echo=FALSE}
-if (!is.null(params$mr_results)) {
-  knitr::kable(params$mr_results, caption = "MR Results", row.names = FALSE)
+```{r mr-results}
+mr_res <- params$mr_results
+if(!is.null(mr_res) && nrow(mr_res) > 0) {
+  mr_res
 } else {
   "No MR results available."
 }
 ```
-
----
-
-## **Summary**
-This report was generated automatically from the Shiny app and includes:
-- The harmonized data used for the analysis.
-- The results of the Mendelian Randomization analysis.
-
-Generated on: `r Sys.Date()`
-```
-
