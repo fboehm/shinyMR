@@ -29,6 +29,7 @@ read_uploaded_file <- function(file, sep) {
 }
 
 # 2) OLS-based lookup: common trait name -> EFO ID
+#    (Existing approach: queries OLS directly)
 get_efo_from_trait_name <- function(trait_name) {
   if (trait_name == "") return(NULL)
   base_url <- "https://www.ebi.ac.uk/ols/api/search"
@@ -54,6 +55,7 @@ get_efo_from_trait_name <- function(trait_name) {
 }
 
 # 3) OLS-based lookup: EFO ID -> common trait name
+#    (Existing approach: queries OLS directly)
 get_trait_name_from_efo <- function(efo_id) {
   if (efo_id == "") return(NULL)
   
@@ -79,6 +81,39 @@ get_trait_name_from_efo <- function(efo_id) {
   })
   
   out
+}
+
+# NEW: 4) Using GWASapi to retrieve studies and metadata based on a trait name.
+# This allows you to handle cases where multiple GWAS exist for a single broad trait (e.g., 'lung cancer').
+search_studies_by_trait <- function(trait_name, size = 100) {
+  # This uses GWASapi to search for relevant studies in the GWAS Catalog.
+  # You may adjust parameters as needed.
+  res <- tryCatch({
+    search_studies(query = trait_name, size = size)
+  }, error = function(e) {
+    return(NULL)
+  })
+  res
+}
+
+get_study_metadata_from_ids <- function(study_ids) {
+  # Retrieves metadata for each study_id (vector of IDs) from the GWAS Catalog
+  # and combines them into a single data frame.
+  metadata_list <- lapply(study_ids, function(st_id) {
+    tryCatch({
+      get_study(st_id)
+    }, error = function(e) {
+      NULL
+    })
+  })
+  # Filter out any NULLs
+  metadata_list <- metadata_list[!sapply(metadata_list, is.null)]
+  
+  if (length(metadata_list) == 0) return(NULL)
+  
+  # Each item in 'metadata_list' is typically a list of details. 
+  # You might convert each to a data.frame, then bind them all together.
+  do.call(rbind, lapply(metadata_list, as.data.frame))
 }
 
 # --------------------------
@@ -123,6 +158,12 @@ ui <- fluidPage(
       actionButton("get_outcome_snps_api", "Get Outcome SNPs (for the same SNP list)"),
       hr(),
       
+      # NEW UI Buttons to handle multiple-studies lookup and metadata retrieval
+      h4("Retrieve Multiple GWAS & Metadata via GWASapi"),
+      actionButton("search_exposure_studies", "Search Exposure Studies by Trait Name"),
+      actionButton("search_outcome_studies", "Search Outcome Studies by Trait Name"),
+      hr(),
+      
       # -- Column Mapping for Exposure (conditional)
       conditionalPanel(
         condition = "output.showExposureMapping",
@@ -161,7 +202,13 @@ ui <- fluidPage(
         tabPanel("Plots", 
                  plotOutput("mr_plot"), 
                  plotOutput("funnel_plot"), 
-                 plotOutput("loo_forest_plot"))
+                 plotOutput("loo_forest_plot")),
+        
+        # NEW Tabs: We will store the results of multiple-study lookups and metadata
+        tabPanel("Exposure Studies Found", tableOutput("found_exposure_studies_table")),
+        tabPanel("Exposure Study Metadata", tableOutput("exposure_studies_metadata_table")),
+        tabPanel("Outcome Studies Found", tableOutput("found_outcome_studies_table")),
+        tabPanel("Outcome Study Metadata", tableOutput("outcome_studies_metadata_table"))
       )
     )
   )
@@ -177,7 +224,12 @@ server <- function(input, output, session) {
     outcome_data = NULL,
     pval_threshold = 5e-8,
     exposure_snps_api = NULL,
-    outcome_snps_api = NULL
+    outcome_snps_api = NULL,
+    # NEW: placeholders for multiple-study queries
+    found_exposure_studies = NULL,
+    exposure_studies_metadata = NULL,
+    found_outcome_studies = NULL,
+    outcome_studies_metadata = NULL
   )
   
   # 1) Handle local file uploads --------------------------------------
@@ -451,6 +503,11 @@ server <- function(input, output, session) {
     rv$exposure_snps_api <- NULL
     rv$outcome_snps_api <- NULL
     
+    rv$found_exposure_studies <- NULL
+    rv$exposure_studies_metadata <- NULL
+    rv$found_outcome_studies <- NULL
+    rv$outcome_studies_metadata <- NULL
+    
     reset("exposure_file")
     reset("outcome_file")
     
@@ -459,6 +516,11 @@ server <- function(input, output, session) {
     output$exposure_snps_api <- renderTable(NULL)
     output$outcome_snps_api <- renderTable(NULL)
     output$exposure_snp_qc <- renderTable(NULL)
+    
+    output$found_exposure_studies_table <- renderTable(NULL)
+    output$exposure_studies_metadata_table <- renderTable(NULL)
+    output$found_outcome_studies_table <- renderTable(NULL)
+    output$outcome_studies_metadata_table <- renderTable(NULL)
     
     showNotification("Uploads reset successfully!", type = "message")
   })
@@ -492,6 +554,83 @@ server <- function(input, output, session) {
       )
     }
   )
+  
+  # NEW: Search for multiple GWAS/studies for the input trait name (Exposure)
+  observeEvent(input$search_exposure_studies, {
+    req(input$exposure_trait_name)
+    trait_name <- input$exposure_trait_name
+    
+    # Get a table of studies for this trait from GWAS Catalog
+    studies_found <- search_studies_by_trait(trait_name, size = 100)
+    
+    if (is.null(studies_found) || nrow(studies_found) == 0) {
+      showNotification("No exposure studies found for the given trait name in GWAS Catalog.", type = "warning")
+      return(NULL)
+    }
+    
+    rv$found_exposure_studies <- studies_found
+    
+    # Retrieve metadata for each study
+    all_ids <- studies_found$study_id
+    meta_df <- get_study_metadata_from_ids(all_ids)
+    
+    if (is.null(meta_df)) {
+      showNotification("No metadata could be retrieved for these exposure studies.", type = "warning")
+    }
+    
+    rv$exposure_studies_metadata <- meta_df
+    
+    showNotification("Exposure studies and metadata retrieved successfully.", type = "message")
+  })
+  
+  # NEW: Search for multiple GWAS/studies for the input trait name (Outcome)
+  observeEvent(input$search_outcome_studies, {
+    req(input$outcome_trait_name)
+    trait_name <- input$outcome_trait_name
+    
+    # Get a table of studies for this trait from GWAS Catalog
+    studies_found <- search_studies_by_trait(trait_name, size = 100)
+    
+    if (is.null(studies_found) || nrow(studies_found) == 0) {
+      showNotification("No outcome studies found for the given trait name in GWAS Catalog.", type = "warning")
+      return(NULL)
+    }
+    
+    rv$found_outcome_studies <- studies_found
+    
+    # Retrieve metadata for each study
+    all_ids <- studies_found$study_id
+    meta_df <- get_study_metadata_from_ids(all_ids)
+    
+    if (is.null(meta_df)) {
+      showNotification("No metadata could be retrieved for these outcome studies.", type = "warning")
+    }
+    
+    rv$outcome_studies_metadata <- meta_df
+    
+    showNotification("Outcome studies and metadata retrieved successfully.", type = "message")
+  })
+  
+  # NEW: Renders for the newly added tables
+  output$found_exposure_studies_table <- renderTable({
+    req(rv$found_exposure_studies)
+    rv$found_exposure_studies
+  })
+  
+  output$exposure_studies_metadata_table <- renderTable({
+    req(rv$exposure_studies_metadata)
+    rv$exposure_studies_metadata
+  })
+  
+  output$found_outcome_studies_table <- renderTable({
+    req(rv$found_outcome_studies)
+    rv$found_outcome_studies
+  })
+  
+  output$outcome_studies_metadata_table <- renderTable({
+    req(rv$outcome_studies_metadata)
+    rv$outcome_studies_metadata
+  })
 }
 
 shinyApp(ui = ui, server = server)
