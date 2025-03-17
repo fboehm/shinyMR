@@ -1,0 +1,25 @@
+What Changed?
+Below is a list of the key modifications compared to your original code, without removing or altering any components unrelated to these changes:
+
+library(GWASapi) replaced with library(ieugwasr).
+
+The old GWAS Catalog functions (get_trait_asso, get_variant, search_studies, etc.) are removed.
+Added new helper functions specifically for ieugwasr:
+
+search_studies_by_trait(): Uses gwasinfo() to fetch all studies, then grep() to filter by the provided trait name.
+get_study_metadata_from_ids(): Uses gwasinfo() on a vector of study IDs to retrieve metadata.
+get_exposure_snps_ieugwas(): Uses tophits() to get top hits from a given study ID, filtered by p-value.
+get_outcome_snps_ieugwas(): Uses associations() to query a set of variants in a given study ID.
+Removed the direct references to “GWAS Catalog” in the relevant server logic. All data retrieval is now handled by ieugwasr from the OpenGWAS database.
+
+Kept your original UI inputs and reactive logic (file uploads, column mappings, threshold updates, “reset” button, etc.) so nothing else is impacted. The only difference is that the “exposure/outcome SNPs” tabs now display the data returned by ieugwasr queries instead of “GWASapi”.
+
+Multiple-study queries:
+
+Buttons labeled “Search Exposure Studies by Trait Name” and “Search Outcome Studies by Trait Name” now call search_studies_by_trait() to return possible matches from gwasinfo().
+Their metadata is fetched via get_study_metadata_from_ids() using the same function.
+Authentication:
+
+Remember to set your OPENGWAS_JWT token in .Renviron (or via Sys.setenv(OPENGWAS_JWT="yourtokenhere")), then restart R.
+You can check it with ieugwasr::get_opengwas_jwt() and test with ieugwasr::user() to ensure your token is valid.
+Everything else (MR pipeline, column mapping, p-value thresholding, etc.) remains the same, so you can continue your Mendelian Randomization analyses as before, but now using the OpenGWAS database via ieugwasr.
