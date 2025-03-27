@@ -139,7 +139,7 @@ print(exposure_snps)
 ```{r outcome_snps}
 get_outcome_snps_ieugwas <- function(variants, gwas_id, p_upper) {
   if (length(variants) == 0) return(NULL)
-  outres <- tryCatch({
+#  outres <- tryCatch({
     tmp <- associations(variants = variants, id = gwas_id, proxies = 0)
     tmp <- tmp[tmp$p <= p_upper, ]
     
@@ -149,22 +149,32 @@ get_outcome_snps_ieugwas <- function(variants, gwas_id, p_upper) {
           beta_outcome = beta,
           se_outcome   = se
         )
-    }
-    tmp
-  }, error = function(e) {
-    NULL
-  })
-  outres
+ #   }
+  #  tmp
+  #}, error = function(e) {
+   # NULL
+  #})
+  #outres
+      tmp
 }
 
 # ---- Test ----
-outcome_study_id <- "ieu-a-7"
+outcome_study_id <- "ieu-a-1"
 if (!is.null(exposure_snps)) {
   candidate_snps <- unique(exposure_snps$rsid)
   outcome_snps <- get_outcome_snps_ieugwas(variants = candidate_snps, gwas_id = outcome_study_id, p_upper = 1.0)
   print(outcome_snps)
 }
 ```
+
+
+```{r}
+variants <- candidate_snps
+gwas_id <- outcome_id
+p_upper <- 10
+
+```
+
 
 ---
 
@@ -220,22 +230,26 @@ library(TwoSampleMR)
 
 exposure_mock <- data.frame(
   SNP = c("rs111", "rs222", "rs333"),
-  beta = c(0.02, 0.05, 0.01),
-  se = c(0.005, 0.01, 0.003),
-  effect_allele = c("A", "G", "T"),
-  other_allele = c("C", "T", "A"),
+  beta.exposure = c(0.02, 0.05, 0.01),
+  se.exposure = c(0.005, 0.01, 0.003),
+  effect_allele.exposure = c("A", "G", "T"),
+  other_allele.exposure = c("C", "T", "A"),
   pval = c(1e-8, 1e-9, 3e-8),
-  samplesize = c(10000, 15000, 12000)
+  samplesize = c(10000, 15000, 12000),
+  id.exposure = c(1,1,1),
+  exposure = c("fake trait 1")
 )
 
 outcome_mock <- data.frame(
   SNP = c("rs111", "rs222", "rs333"),
-  beta = c(0.03, 0.01, 0.02),
-  se = c(0.007, 0.005, 0.004),
-  effect_allele = c("A", "G", "T"),
-  other_allele = c("C", "T", "A"),
+  beta.outcome = c(0.03, 0.01, 0.02),
+  se.outcome = c(0.007, 0.005, 0.004),
+  effect_allele.outcome = c("A", "G", "T"),
+  other_allele.outcome = c("C", "T", "A"),
   pval = c(5e-3, 1e-2, 2e-3),
-  samplesize = c(9000, 14000, 11000)
+  samplesize = c(9000, 14000, 11000),
+  id.outcome = c(2,2,2),
+  outcome = c("fake trait 2")
 )
 
 harmonised <- harmonise_data(exposure_mock, outcome_mock)
