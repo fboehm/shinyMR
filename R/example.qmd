@@ -1,0 +1,69 @@
+---
+title: "Quantifying the causal effect of systolic blood pressure on myocardial infarction"
+format: html
+---
+
+## Step 1: get the trait-study IDs from OpenGWAS
+
+
+
+
+```{r}
+ao <- TwoSampleMR::available_outcomes() |> 
+    tibble::as_tibble()
+systolic_studies <- ao |>
+    dplyr::filter(stringr::str_detect(string = trait, pattern = "Systolic"))
+myocardial_studies <- ao |>
+    dplyr::filter(stringr::str_detect(string = trait, pattern = "Myocardial"))
+```
+
+We need to choose exactly one systolic BP and one MI study. We want to choose a single "ethnicity" for the analysis. Let's choose "East Asian".
+
+```{r}
+sys_east <- systolic_studies |>
+    dplyr::filter(stringr::str_detect(string = population, pattern = "East"))
+sys_east |>
+    dplyr::select(nsnp, sample_size, population, sex, consortium, author)
+exposure_id <- sys_east$id[2]
+sys_east |> dplyr::slice(2) |> knitr::kable()
+```
+
+Now, get a study id for MI.
+
+```{r}
+myocardial_studies |> print(n = Inf)
+# notice that Sakauer - author of the sys bp study - is listed as author for some of the MI studies. probably need to avoid using Sakauer's study for MI to avoid sample overlap.
+myocardial_studies |>
+    dplyr::filter(stringr::str_detect(string = population, pattern = "East"))
+```
+
+It seems that the only GWASs with East Asian population are from Sakauer. So, we need to reconsider our study choices due to probable sample overlap. 
+
+```{r}
+pop <- "European"
+sys_pop <- systolic_studies |>
+    dplyr::filter(stringr::str_detect(string = population, pattern = pop))
+myo_pop <- myocardial_studies |>
+    dplyr::filter(stringr::str_detect(string = population, pattern = pop))
+outcome_id <- myo_pop$id[7]
+exposure_id <- sys_pop$id[1]
+```
+
+```{r}
+exposure_dat <- TwoSampleMR::extract_instruments(outcomes = exposure_id, p1 = 5e-08)
+outcome_dat <- TwoSampleMR::extract_outcome_data(snps = exposure_dat$SNP, outcomes = outcome_id)
+```
+
+
+```{r}
+#| label: harmonise
+dat_harmonised <- TwoSampleMR::harmonise_data(exposure_dat = exposure_dat, outcome_dat = outcome_dat)
+```
+
+```{r}
+mr_result <- TwoSampleMR::mr(dat_harmonised)
+```
+
+```{r}
+TwoSampleMR::mr_scatter_plot(mr_result, dat_harmonised)
+```

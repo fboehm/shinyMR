@@ -86,7 +86,7 @@ Below, we use the `extract_instruments()` function to get genome-wide significan
 
 ```{r extract_exposure}
 # By default, this uses p1=5e-8 for significance, but you can adjust it
-exposure_dat <- extract_instruments(outcomes = exposure_id, p1 = 5e-8)
+exposure_dat <- extract_instruments(outcomes = exposure_id, p1 = 5e-28)
 
 # Inspect the exposure SNPs
 head(exposure_dat)
