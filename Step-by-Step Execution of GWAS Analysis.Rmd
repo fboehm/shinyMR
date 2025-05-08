@@ -139,23 +139,17 @@ print(exposure_snps)
 ```{r outcome_snps}
 get_outcome_snps_ieugwas <- function(variants, gwas_id, p_upper) {
   if (length(variants) == 0) return(NULL)
-#  outres <- tryCatch({
-    tmp <- associations(variants = variants, id = gwas_id, proxies = 0)
-    tmp <- tmp[tmp$p <= p_upper, ]
-    
-    if (!is.null(tmp) && nrow(tmp) > 0) {
-      tmp <- tmp %>%
-        dplyr::rename(
-          beta_outcome = beta,
-          se_outcome   = se
-        )
- #   }
-  #  tmp
-  #}, error = function(e) {
-   # NULL
-  #})
-  #outres
-      tmp
+  tmp <- associations(variants = variants, id = gwas_id, proxies = 0)
+  tmp <- tmp[tmp$p <= p_upper, ]
+  
+  if (!is.null(tmp) && nrow(tmp) > 0) {
+    tmp <- tmp %>%
+      dplyr::rename(
+        beta_outcome = beta,
+        se_outcome   = se
+      )
+  }
+  tmp
 }
 
 # ---- Test ----

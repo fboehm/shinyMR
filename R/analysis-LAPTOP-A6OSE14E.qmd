@@ -1,0 +1,29 @@
+---
+title: "Untitled"
+format: html
+---
+
+```{r}
+#| eval: false
+remotes::install_github("rqtl/GWASapi")
+```
+
+
+
+```{r}
+library(GWASapi)
+```
+
+## `get_trait_asso` 
+
+`get_trait_asso` returns associations, possibly from multiple studies, for a single trait, encoded by its EFO identifier.
+
+In the query result, there is a column called `study_accession`, which identifies the study. 
+
+We probably need to limit MR analysis to a single study accession value for exposure and one for outcome. 
+
+```{r}
+efo_dm <- "EFO_0000400" # https://www.ebi.ac.uk/ols4/ontologies/efo/classes/http%253A%252F%252Fwww.ebi.ac.uk%252Fefo%252FEFO_0000400
+dm_asso <- get_trait_asso(trait = efo_dm, size = 100)
+```
+
