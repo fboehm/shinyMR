@@ -56,23 +56,29 @@ server <- function(input, output, session) {
   filtered_exposure <- reactive({
     req(input$exposure_trait)
     ao |> 
-      filter(str_detect(trait, regex(input$exposure_trait, ignore_case = TRUE))) |> 
-      arrange(desc(n))
+      filter(str_detect(trait, regex(input$exposure_trait, ignore_case = TRUE)))
   })
 
   filtered_outcome <- reactive({
     req(input$outcome_trait)
     ao |> 
-      filter(str_detect(trait, regex(input$outcome_trait, ignore_case = TRUE))) |> 
-      arrange(desc(n))
+      filter(str_detect(trait, regex(input$outcome_trait, ignore_case = TRUE)))
   })
 
   output$exposure_table <- renderDT({
-    datatable(filtered_exposure(), selection = list(mode = "single", target = "row"))
+    datatable(
+      filtered_exposure(), 
+      selection = list(mode = "single", target = "row"),
+      options = list(ordering = TRUE)
+    )
   })
 
   output$outcome_table <- renderDT({
-    datatable(filtered_outcome(), selection = list(mode = "single", target = "row"))
+    datatable(
+      filtered_outcome(), 
+      selection = list(mode = "single", target = "row"),
+      options = list(ordering = TRUE)
+    )
   })
 
   selected_exposure_id <- reactive({
@@ -118,7 +124,7 @@ server <- function(input, output, session) {
   })
 
   mr_results <- reactive({
-    mr(harmonised_data())
+    mr(harmonised_data(), method_list = mr_method_list()$obj)
   })
 
   output$instruments_table <- renderDT({
