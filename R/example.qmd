@@ -17,7 +17,7 @@ myocardial_studies <- ao |>
     dplyr::filter(stringr::str_detect(string = trait, pattern = "Myocardial"))
 ```
 
-We need to choose exactly one systolic BP and one MI study. We want to choose a single "ethnicity" for the analysis. Let's choose "East Asian".
+We need to choose exactly one systolic BP and one MI study. We want to choose a single "ancestry group" for the analysis. Let's choose "East Asian".
 
 ```{r}
 sys_east <- systolic_studies |>
