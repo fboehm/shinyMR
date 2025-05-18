@@ -46,6 +46,10 @@ ui <- fluidPage(
     tabPanel("Scatter Plot",
       h4("MR Scatter Plot"),
       plotOutput("scatter_plot")
+    ),
+    tabPanel("Download Report",
+      h4("Generate MR HTML Report"),
+      downloadButton("download_report", "Download MR Report")
     )
   )
 )
@@ -124,7 +128,9 @@ server <- function(input, output, session) {
   })
 
   mr_results <- reactive({
-    mr(harmonised_data(), method_list = mr_method_list()$obj)
+    results <- mr(harmonised_data(), method_list = mr_method_list()$obj)
+    method_info <- mr_method_list()
+    left_join(results, method_info, by = c("method" = "name"))
   })
 
   output$instruments_table <- renderDT({
@@ -143,6 +149,17 @@ server <- function(input, output, session) {
     plot <- mr_scatter_plot(mr_results(), harmonised_data())
     plot[[1]]
   })
+
+  output$download_report <- downloadHandler(
+    filename = function() {
+      paste0("mr_report_", Sys.Date(), ".html")
+    },
+    content = function(file) {
+      tmp_file <- tempfile(fileext = ".html")
+      mr_report(dat = harmonised_data(), output_path = tmp_file)
+      file.copy(tmp_file, file)
+    }
+  )
 }
 
 # Run the application
