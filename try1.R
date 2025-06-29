@@ -11,7 +11,7 @@ ao <- available_outcomes() |>
 
 # Define UI
 ui <- fluidPage(
-  titlePanel("Trait Filter and Selection App"),
+  titlePanel("ShinyMR"),
 
   tabsetPanel(
     tabPanel("Trait Selection",
