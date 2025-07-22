@@ -128,7 +128,7 @@ server <- function(input, output, session) {
   })
 
   mr_results <- reactive({
-    results <- mr(harmonised_data(), method_list = mr_method_list()$obj)
+    results <- mr(harmonised_data())
     method_info <- mr_method_list()
     left_join(results, method_info, by = c("method" = "name"))
   })
